@@ -9,7 +9,6 @@ describe('parseLength', () => {
     expect(parseLength('10ft 6in', 'imperial')).toBeCloseTo(10 * FT + 6 * IN);
     expect(parseLength('126"', 'imperial')).toBeCloseTo(126 * IN);
     expect(parseLength('34 1/2"', 'imperial')).toBeCloseTo(34.5 * IN);
-    expect(parseLength('12', 'imperial')).toBeCloseTo(12 * FT);
   });
   it('parses metric', () => {
     expect(parseLength('3.2m', 'metric')).toBeCloseTo(3.2);

@@ -321,21 +321,14 @@ export function itemClearances(project: Project, item: Item, maxDist = 6): Clear
     { local: { x: item.width / 2, z: 0 }, dir: { x: 1, z: 0 } },
     { local: { x: -item.width / 2, z: 0 }, dir: { x: -1, z: 0 } },
   ];
-  const segments: { a: Vec2; b: Vec2; target: 'wall' | 'item'; id?: string; yMin: number; yMax: number }[] = [];
-  for (const r of project.rooms) {
-    for (const w of roomWalls(r)) {
-      const off = scale(w.inward, r.wallThickness / 2);
-      segments.push({ a: add(w.a, off), b: add(w.b, off), target: 'wall', id: r.id, yMin: -1, yMax: 99 });
-    }
-  }
+  const segments: { a: Vec2; b: Vec2; target: 'wall' | 'item'; id?: string }[] = [];
+  for (const w of wallFaceSegments(project, item.y, item.y + item.height)) segments.push({ a: w.a, b: w.b, target: 'wall', id: w.roomId });
   for (const o of project.items) {
-    if (o.id === item.id) continue;
+    if (o.id === item.id || !isObstacle(o)) continue;
     // only consider items that overlap vertically
-    const yMin = o.y;
-    const yMax = o.y + o.height;
-    if (yMax <= item.y + 0.01 || yMin >= item.y + item.height - 0.01) continue;
-    const c = itemCorners(o);
-    for (let i = 0; i < 4; i++) segments.push({ a: c[i], b: c[(i + 1) % 4], target: 'item', id: o.id, yMin, yMax });
+    if (o.y + o.height <= item.y + 0.01 || o.y >= item.y + item.height - 0.01) continue;
+    const c = itemOutline(o);
+    for (let i = 0; i < c.length; i++) segments.push({ a: c[i], b: c[(i + 1) % c.length], target: 'item', id: o.id });
   }
   for (const s of sides) {
     const origin = add(rotate(s.local, item.rotation), { x: item.x, z: item.z });
@@ -352,6 +345,70 @@ export function itemClearances(project: Project, item: Item, maxDist = 6): Clear
     if (hit) res.push({ from: origin, to: add(origin, scale(dir, best)), distance: best, target: hit.target, targetId: hit.id });
   }
   return res;
+}
+
+/** Things you can walk on / that hang on walls or ceilings do not block space. */
+export function isObstacle(it: Item): boolean {
+  return !(it.kind === 'rug' || it.category === 'lighting' || it.kind === 'wall-art' || it.kind === 'curtains');
+}
+
+/** World-space outline of an item's real footprint (L-shapes, round tables, custom footprints…). */
+export function itemOutline(it: Item): Vec2[] {
+  const w = it.width;
+  const d = it.depth;
+  let local: Vec2[];
+  if (it.shape === 'cylinder' || it.kind === 'round-table') {
+    local = Array.from({ length: 16 }, (_, i) => ({ x: (Math.cos((i / 16) * Math.PI * 2) * w) / 2, z: (Math.sin((i / 16) * Math.PI * 2) * d) / 2 }));
+  } else if (it.shape === 'l-shape') {
+    const r = it.legRatio ?? 0.4;
+    const xr = it.kind === 'sectional' ? 0.33 : r;
+    local = [
+      { x: -0.5, z: -0.5 },
+      { x: 0.5, z: -0.5 },
+      { x: 0.5, z: -0.5 + r },
+      { x: -0.5 + xr, z: -0.5 + r },
+      { x: -0.5 + xr, z: 0.5 },
+      { x: -0.5, z: 0.5 },
+    ].map((q) => ({ x: q.x * w, z: q.z * d }));
+  } else if (it.shape === 'footprint' && it.footprint && it.footprint.length >= 3) {
+    local = it.footprint.map((q) => ({ x: q.x * w, z: q.z * d }));
+  } else if (it.kind === 'corner-base') {
+    const leg = Math.min(0.61, w, d);
+    local = [
+      { x: -w / 2, z: -d / 2 },
+      { x: w / 2, z: -d / 2 },
+      { x: w / 2, z: -d / 2 + leg },
+      { x: -w / 2 + leg, z: -d / 2 + leg },
+      { x: -w / 2 + leg, z: d / 2 },
+      { x: -w / 2, z: d / 2 },
+    ];
+  } else {
+    return itemCorners(it);
+  }
+  return local.map((q) => add(rotate(q, it.rotation), { x: it.x, z: it.z }));
+}
+
+/**
+ * Interior faces of all visible walls, with gaps where an opening is at the given height range
+ * (a door lets you see through at floor level; a window only above its sill).
+ */
+export function wallFaceSegments(project: Project, yMin: number, yMax: number): { a: Vec2; b: Vec2; roomId: string; index: number }[] {
+  const out: { a: Vec2; b: Vec2; roomId: string; index: number }[] = [];
+  for (const r of project.rooms) {
+    for (const w of roomWalls(r)) {
+      if (r.hiddenWalls.includes(w.index)) continue;
+      const off = scale(w.inward, r.wallThickness / 2);
+      const gaps = openingsForWall(project, w)
+        .filter((o) => o.opening.sill < yMax - 0.01 && o.opening.sill + o.opening.height > yMin + 0.01)
+        .map((o) => [o.u0, o.u1] as [number, number]);
+      let u = 0;
+      for (const [g0, g1] of [...gaps, [w.length, w.length] as [number, number]]) {
+        if (g0 > u + 1e-4) out.push({ a: add(add(w.a, scale(w.dir, u)), off), b: add(add(w.a, scale(w.dir, g0)), off), roomId: r.id, index: w.index });
+        u = Math.max(u, g1);
+      }
+    }
+  }
+  return out;
 }
 
 /** Ray (origin + t*dir) vs segment; returns t or null. */
@@ -374,6 +431,7 @@ export function snapItemToWall(project: Project, item: Item, threshold = 0.25): 
   let best: { x: number; z: number; rotation: number; d: number } | null = null;
   for (const r of project.rooms) {
     for (const w of roomWalls(r)) {
+      if (r.hiddenWalls.includes(w.index)) continue; // open-plan edge: nothing to stand against
       const innerA = add(w.a, scale(w.inward, r.wallThickness / 2));
       const innerB = add(w.b, scale(w.inward, r.wallThickness / 2));
       const cp = closestPointOnSegment({ x: item.x, z: item.z }, innerA, innerB);
@@ -389,6 +447,11 @@ export function snapItemToWall(project: Project, item: Item, threshold = 0.25): 
       const along = dot(sub(pos, innerA), w.dir);
       const clamped = Math.max(item.width / 2, Math.min(w.length - item.width / 2, along));
       const p2 = add(add(innerA, scale(w.dir, clamped)), scale(w.inward, item.depth / 2));
+      // never park a cabinet in front of a doorway (or in a window it is tall enough to reach)
+      const blocked = openingsForWall(project, w).some(
+        (o) => o.u0 < clamped + item.width / 2 - 0.01 && o.u1 > clamped - item.width / 2 + 0.01 && o.opening.sill < item.y + item.height - 0.01 && o.opening.sill + o.opening.height > item.y + 0.01,
+      );
+      if (blocked) continue;
       if (!best || Math.abs(gap) < best.d) best = { x: p2.x, z: p2.z, rotation, d: Math.abs(gap) };
     }
   }

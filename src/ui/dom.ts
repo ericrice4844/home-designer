@@ -42,7 +42,15 @@ export function section(title: string, ...children: Child[]) {
 /** Text input that accepts lengths like 10'6", 3.2m, 126in. */
 export function lengthInput(value: number, onCommit: (m: number) => void, opts: { min?: number; max?: number } = {}) {
   const units = store.project.settings.units;
-  const input = h('input', { type: 'text', class: 'len', value: formatLength(value, units, true), inputmode: 'decimal', spellcheck: false });
+  const input = h('input', {
+    type: 'text',
+    class: 'len',
+    value: formatLength(value, units, true),
+    inputmode: 'text',
+    spellcheck: false,
+    title: units === 'metric' ? 'e.g. 2.4 m, 240 cm – a plain number is meters' : `e.g. 10' 6", 34 1/2", 3 ft – a plain number is inches`,
+    'aria-label': 'Length',
+  });
   const commit = () => {
     const v = parseLength(input.value, store.project.settings.units);
     if (v === null || !isFinite(v)) {
