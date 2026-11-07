@@ -28,6 +28,12 @@ npm test         # unit tests (units parsing, geometry, kitchen generator)
 npm run build    # production build in dist/ (static files – host anywhere)
 ```
 
+## Publishing (GitHub Pages)
+
+Every push to `main` runs `.github/workflows/deploy.yml`, which tests, builds and publishes the app to
+`https://<user>.github.io/home-designer/`. One-time setup: repo **Settings → Pages → Source: GitHub Actions**.
+On a phone, open the URL and choose *Add to Home Screen* / *Install app*.
+
 ## Project layout
 
 ```
