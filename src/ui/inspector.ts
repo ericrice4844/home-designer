@@ -446,7 +446,7 @@ export function itemPanel(it: Item): HTMLElement {
         }),
         button('Delete', () => store.deleteSelection(), 'danger'),
       ),
-      h('p', { class: 'hint' }, 'Tip: drag in plan or 3D (tap once to select, then drag). Hold Alt to disable snapping. R rotates, Del deletes, Ctrl+D duplicates.'),
+      h('p', { class: 'hint' }, 'Tip: press and drag in plan or 3D to move. Tap again to reach an item stacked underneath. Hold Alt to disable snapping. R rotates, Del deletes, Ctrl+D duplicates.'),
     ),
   );
   return root;

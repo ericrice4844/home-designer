@@ -322,6 +322,73 @@ input.invalid {
   pointer-events: none;
 }
 
+/* selection action bar */
+.action-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  z-index: 8;
+  max-width: calc(100% - 16px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.act-title {
+  display: flex;
+  flex-direction: column;
+  padding: 0 10px 0 8px;
+  line-height: 1.15;
+  max-width: 150px;
+  min-width: 0;
+}
+.act-title b {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: capitalize;
+}
+.act-title small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.btn.act {
+  border-color: transparent;
+  background: transparent;
+  padding: 4px 9px;
+  min-width: 46px;
+  font-size: 18px;
+  line-height: 1;
+}
+.btn.act > span {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.btn.act small {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.btn.act:hover {
+  background: var(--panel-2);
+}
+.btn.act.danger small {
+  color: var(--danger);
+}
+.btn.act.close {
+  font-size: 14px;
+  min-width: 34px;
+  color: var(--muted);
+}
+
 /* 3D labels */
 .dim-label {
   background: #fff;
@@ -1116,6 +1183,16 @@ kbd {
   }
   .walk-help {
     display: none;
+  }
+  .action-bar {
+    bottom: 8px;
+  }
+  .act-title {
+    display: none;
+  }
+  .btn.act {
+    min-width: 44px;
+    padding: 6px 6px;
   }
 }
 

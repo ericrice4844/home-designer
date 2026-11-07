@@ -611,14 +611,20 @@ export class Viewer {
     const hits = this.raycaster.intersectObjects(targets, true);
     for (const h of hits) {
       const mesh = h.object as THREE.Mesh;
-      if (!mesh.visible) continue;
+      if (mesh.userData.edges) continue;
+      // skip anything hidden (e.g. ceilings in overview mode) – raycasting ignores visibility
+      let hidden = false;
+      for (let a: THREE.Object3D | null = mesh; a; a = a.parent) if (!a.visible) hidden = true;
+      if (hidden) continue;
       const m = mesh.material as THREE.Material;
-      if (m && (m as any).opacity !== undefined && (m as any).opacity < 0.2) continue;
+      const isItem = (() => {
+        for (let g: THREE.Object3D | null = mesh; g; g = g.parent) if (g.userData.type === 'item') return true;
+        return false;
+      })();
+      if (!isItem && m && (m as any).opacity !== undefined && (m as any).opacity < 0.2) continue;
       let o: THREE.Object3D | null = mesh;
       while (o && !o.userData.type) o = o.parent;
       if (!o) continue;
-      if (o.userData.type === 'ceiling' && !o.visible) continue;
-      // walk up to item group if any
       let g: THREE.Object3D | null = mesh;
       while (g) {
         if (g.userData.type === 'item' || g.userData.type === 'opening') return { data: g.userData, point: h.point };
@@ -644,7 +650,9 @@ export class Viewer {
       const hit = this.pick(e);
       if (hit?.data.type === 'item') {
         const it = store.item(hit.data.id);
-        if (it && !it.locked && store.ui.selection?.type === 'item' && store.ui.selection.id === it.id) {
+        if (it) store.select({ type: 'item', id: it.id });
+        // press-and-drag moves furniture right away (no need to select first)
+        if (it && !it.locked) {
           const base = itemBaseY(store.project, it);
           const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -base);
           const pt = new THREE.Vector3();

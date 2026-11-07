@@ -125,7 +125,8 @@ export class App {
     );
     this.threeWrap.append(this.camBar);
 
-    this.views = h('main', { class: 'views' }, this.planWrap, this.threeWrap);
+    this.actionBar = h('div', { class: 'action-bar hidden' });
+    this.views = h('main', { class: 'views' }, this.planWrap, this.threeWrap, this.actionBar);
 
     const navItems: [string, string, () => void][] = [
       ['＋', 'Add', () => this.toggleSheet('left')],
@@ -189,10 +190,58 @@ export class App {
   }
   private viewerMode: CameraMode = 'orbit';
   private pendingRender = false;
+  private actionBar!: HTMLElement;
 
   private renderAll() {
     this.renderLeft();
     this.renderRight();
+    this.renderActionBar();
+  }
+
+  /** Quick actions for the selected item / opening, always visible over the views. */
+  private renderActionBar() {
+    const sel = store.ui.selection;
+    const it = sel?.type === 'item' ? store.item(sel.id) : undefined;
+    const op = sel?.type === 'opening' ? store.opening(sel.id) : undefined;
+    const bar = this.actionBar;
+    if ((!it && !op) || store.ui.camera === 'walk') {
+      bar.classList.add('hidden');
+      return;
+    }
+    bar.classList.remove('hidden');
+    const rotate = (d: number) =>
+      store.update((p) => {
+        const q = p.items.find((i) => i.id === it!.id);
+        if (q) q.rotation += d;
+      });
+    const details = () => {
+      this.rightTab = 'edit';
+      this.renderRight();
+      if (matchMedia('(max-width: 820px)').matches) this.setSheet('right');
+    };
+    const del = button(h('span', {}, '🗑', h('small', {}, 'Delete')), () => store.deleteSelection(), 'act danger', 'Delete (Del)');
+    if (it) {
+      bar.replaceChildren(
+        h('div', { class: 'act-title' }, h('b', {}, it.name), h('small', {}, it.locked ? '🔒 locked' : 'drag to move')),
+        button(h('span', {}, '⟲', h('small', {}, '90°')), () => rotate(-Math.PI / 2), 'act', 'Rotate left'),
+        button(h('span', {}, '⟳', h('small', {}, '90°')), () => rotate(Math.PI / 2), 'act', 'Rotate right (R)'),
+        button(h('span', {}, '⧉', h('small', {}, 'Copy')), () => duplicateItem(it), 'act', 'Duplicate (Ctrl+D)'),
+        button(h('span', {}, it.locked ? '🔓' : '🔒', h('small', {}, it.locked ? 'Unlock' : 'Lock')), () => store.update((p) => {
+          const q = p.items.find((i) => i.id === it.id);
+          if (q) q.locked = !q.locked;
+        }), 'act', 'Lock position'),
+        button(h('span', {}, '✎', h('small', {}, 'Edit')), details, 'act', 'Size, color & more'),
+        del,
+        button('✕', () => store.select(null), 'act close', 'Deselect (Esc)'),
+      );
+    } else if (op) {
+      bar.replaceChildren(
+        h('div', { class: 'act-title' }, h('b', {}, op.type.replace('-', ' ')), h('small', {}, 'drag along a wall')),
+        button(h('span', {}, '✎', h('small', {}, 'Edit')), details, 'act'),
+        del,
+        button('✕', () => store.select(null), 'act close', 'Deselect (Esc)'),
+      );
+    }
   }
 
   private renderLeft() {
@@ -380,7 +429,7 @@ export class App {
       </ul>
       <h4>Furnish</h4>
       <ul>
-        <li>Tap catalog items to add them, then drag to place. Cabinets and appliances snap to walls and to each other.</li>
+        <li>Tap catalog items to add them. <b>Press and drag any piece to move it</b> (plan or 3D). Tapping a piece shows a bar to rotate, copy, lock or <b>delete</b> it. Tap again to reach a piece stacked underneath (e.g. a cabinet below a wall cabinet). Cabinets and appliances snap to walls and to each other.</li>
         <li><b>Import from photo</b>: remove the background, set real dimensions, and choose a shape (box, cut-out, cylinder, L, or draw a custom footprint).</li>
         <li><b>Import 3D models</b> (.glb/.obj) from manufacturers for exact fixtures and appliances.</li>
         <li>Red dimension lines show the <b>space to walls and other items</b>; blue lines show height above floor / below ceiling.</li>

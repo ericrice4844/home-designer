@@ -25,7 +25,7 @@ import { formatArea, formatLength } from './units';
 
 type Drag =
   | { kind: 'pan'; start: Vec2; c0: Vec2 }
-  | { kind: 'item'; id: string; offset: Vec2; moved: boolean }
+  | { kind: 'item'; id: string; offset: Vec2; moved: boolean; cycle: boolean; at: Vec2; locked: boolean }
   | { kind: 'rotate'; id: string }
   | { kind: 'resize'; id: string; corner: number; anchor: Vec2 }
   | { kind: 'vertex'; roomId: string; index: number }
@@ -185,12 +185,19 @@ export class PlanEditor {
     return { x: s.x + (dx / l) * 24, y: s.y + (dy / l) * 24 };
   }
 
-  private hitItem(p: Vec2): Item | undefined {
-    const items = [...store.project.items].sort((a, b) => b.y + b.height - (a.y + a.height));
-    // prefer small items on top (lamps on tables), then taller
-    const hits = items.filter((it) => pointInItem(p, it));
+  /** Items under a point, smallest first (so lamps on tables / cabinets above counters are reachable). */
+  private hitItems(p: Vec2): Item[] {
+    const pad = 4 / this.view.zoom; // a few pixels of slack makes small items easier to tap
+    const hits = store.project.items.filter((it) => pointInItem(p, { ...it, width: it.width + pad * 2, depth: it.depth + pad * 2 }));
     hits.sort((a, b) => a.width * a.depth - b.width * b.depth);
-    return hits[0];
+    return hits;
+  }
+
+  private hitItem(p: Vec2): Item | undefined {
+    const hits = this.hitItems(p);
+    const sel = store.selectedItem();
+    // keep the current selection when it is one of the candidates
+    return hits.find((h) => h.id === sel?.id) ?? hits[0];
   }
 
   private hitOpening(p: Vec2) {
@@ -372,8 +379,9 @@ export class PlanEditor {
     }
     const it = this.hitItem(p);
     if (it) {
+      const wasSelected = store.selectedItem()?.id === it.id;
       store.select({ type: 'item', id: it.id });
-      if (!it.locked) this.drag = { kind: 'item', id: it.id, offset: { x: it.x - p.x, z: it.z - p.z }, moved: false };
+      this.drag = { kind: 'item', id: it.id, offset: { x: it.x - p.x, z: it.z - p.z }, moved: false, cycle: wasSelected, at: p, locked: !!it.locked };
       return;
     }
     const op = this.hitOpening(p);
@@ -428,6 +436,8 @@ export class PlanEditor {
         break;
       }
       case 'item':
+        if (d.locked) break;
+        if (!d.moved && dist(p, d.at) * this.view.zoom < 4) break; // ignore jitter so taps stay taps
         d.moved = true;
         store.live((proj) => {
           const it = proj.items.find((i) => i.id === d.id);
@@ -572,6 +582,15 @@ export class PlanEditor {
         store.update((p) => p.rooms.push(room));
         store.setUI({ tool: 'select' });
         store.select({ type: 'room', id: room.id });
+      }
+    } else if (d.kind === 'item' && !d.moved) {
+      // second tap on a selected item cycles to the next item stacked under the pointer
+      if (d.cycle) {
+        const hits = this.hitItems(d.at);
+        if (hits.length > 1) {
+          const i = hits.findIndex((h) => h.id === d.id);
+          store.select({ type: 'item', id: hits[(i + 1) % hits.length].id });
+        }
       }
     } else if (d.kind === 'measure') {
       this.measure = { a: d.start, b: d.end };
