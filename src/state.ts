@@ -1,4 +1,5 @@
 import { cloneProject, emptyProject, normalizeProject, type Item, type Opening, type Project, type Room } from './model';
+import { deleteRoom } from './edits';
 import { storage } from './storage';
 
 export type Selection =
@@ -277,10 +278,7 @@ export class Store {
     this.update((p) => {
       if (s.type === 'item') p.items = p.items.filter((i) => i.id !== s.id);
       if (s.type === 'opening') p.openings = p.openings.filter((o) => o.id !== s.id);
-      if (s.type === 'room') {
-        p.rooms = p.rooms.filter((r) => r.id !== s.id);
-        p.openings = p.openings.filter((o) => o.roomId !== s.id);
-      }
+      if (s.type === 'room') deleteRoom(p, s.id);
     });
     this.ui.selection = null;
     this.emit('ui');

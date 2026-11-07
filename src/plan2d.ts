@@ -20,10 +20,12 @@ import {
 } from './geometry';
 import { createRoom, rectPoints, type Item, type Room, type Vec2 } from './model';
 import { moveItem, placeCatalogItem } from './placement';
+import { clampRoomOpenings, finishPolygon } from './edits';
 import { store } from './state';
+import { toast } from './ui/dom';
 import { formatArea, formatLength } from './units';
 
-type Drag =
+export type Drag =
   | { kind: 'pan'; start: Vec2; c0: Vec2 }
   | { kind: 'item'; id: string; offset: Vec2; moved: boolean; cycle: boolean; at: Vec2; locked: boolean }
   | { kind: 'rotate'; id: string }
@@ -266,7 +268,7 @@ export class PlanEditor {
       this.pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
       if (this.pointers.size === 2) {
         // start pinch, cancel any drag
-        if (this.drag && 'id' in this.drag) store.commit();
+        if (this.drag && dragNeedsCommit(this.drag.kind)) store.commit();
         this.drag = null;
         const [a, b] = [...this.pointers.values()];
         this.pinch = {
@@ -485,6 +487,7 @@ export class PlanEditor {
         store.live((proj) => {
           const r = proj.rooms.find((q) => q.id === d.roomId);
           if (r) r.points[d.index] = s;
+          clampRoomOpenings(proj, d.roomId);
         });
         break;
       }
@@ -503,6 +506,7 @@ export class PlanEditor {
           if (!r) return;
           r.points[d.index] = add(d.a0, scale(nn, off));
           r.points[(d.index + 1) % r.points.length] = add(d.b0, scale(nn, off));
+          clampRoomOpenings(proj, d.roomId);
         });
         break;
       }
@@ -601,12 +605,21 @@ export class PlanEditor {
   }
 
   private finishPoly() {
-    if (this.poly.length >= 3) {
-      const room = createRoom(`Room ${store.project.rooms.length + 1}`, this.poly);
-      inheritDefaults(room);
-      store.update((p) => p.rooms.push(room));
-      store.select({ type: 'room', id: room.id });
+    const res = finishPolygon(this.poly);
+    if ('error' in res) {
+      // keep drawing so the user can fix it (unless there is nothing to fix)
+      toast(res.error);
+      if (this.poly.length < 3) {
+        this.poly = [];
+        store.setUI({ tool: 'select' });
+      }
+      this.dirty = true;
+      return;
     }
+    const room = createRoom(`Room ${store.project.rooms.length + 1}`, res.points);
+    inheritDefaults(room);
+    store.update((p) => p.rooms.push(room));
+    store.select({ type: 'room', id: room.id });
     this.poly = [];
     store.setUI({ tool: 'select' });
   }
@@ -1131,6 +1144,11 @@ export class PlanEditor {
       this.text(name, c.x, c.y, dark ? '#eee' : '#222', 10);
     }
   }
+}
+
+/** Drags that change the model through store.live() and must be committed (also when a pinch interrupts them). */
+export function dragNeedsCommit(kind: Drag['kind']): boolean {
+  return kind !== 'pan' && kind !== 'rect' && kind !== 'measure';
 }
 
 function inheritDefaults(room: Room) {

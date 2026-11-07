@@ -16,6 +16,7 @@ import { duplicateItem, emptyPanel, itemPanel, openingPanel, roomPanel, settings
 import { kitchenPanel } from './kitchenPanel';
 import { setPlacementCenter } from './importers';
 import { libraryPanel } from './library';
+import { shortcutFor } from './shortcuts';
 
 type RightTab = 'edit' | 'kitchen' | 'settings';
 type MobileSheet = 'none' | 'left' | 'right';
@@ -488,6 +489,11 @@ export class App {
         duplicateItem(it);
         return;
       }
+      const action = shortcutFor(e, it);
+      if (action === 'locked') {
+        toast('This item is locked – unlock it to move, rotate or delete');
+        return;
+      }
       if ((e.key === 'Delete' || e.key === 'Backspace') && store.ui.selection && store.ui.tool !== 'room-poly') {
         e.preventDefault();
         if (store.ui.selection.type === 'wall') return;
@@ -499,14 +505,14 @@ export class App {
         store.select(null);
         return;
       }
-      if (it && (e.key === 'r' || e.key === 'R')) {
+      if (action === 'rotate' && it) {
         store.update((p) => {
           const q = p.items.find((i) => i.id === it.id);
           if (q) q.rotation += e.shiftKey ? Math.PI / 12 : Math.PI / 2;
         });
         return;
       }
-      if (it && e.key.startsWith('Arrow')) {
+      if (action === 'nudge' && it) {
         e.preventDefault();
         const step = (e.shiftKey ? 12 : 1) * (store.project.settings.units === 'imperial' ? 0.0254 : 0.01);
         const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]!;

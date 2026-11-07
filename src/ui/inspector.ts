@@ -1,6 +1,7 @@
 import { catalogEntry, isCeilingMounted } from '../catalog';
 import { area, bounds, ceilingHeightAt, centroid, maxCeilingHeight, roomAt, roomWalls } from '../geometry';
 import { FT, IN, uid, type CeilingType, type FloorType, type Item, type ItemShape, type Opening, type OpeningType, type Project, type Room } from '../model';
+import { clampOpening, duplicateRoom, freeOpeningOffset, itemsInRoom, scaleRoom, setWallLength, splitWall } from '../edits';
 import { store } from '../state';
 import { floorPreview } from '../three/textures';
 import { formatArea, formatLength } from '../units';
@@ -61,8 +62,8 @@ export function roomPanel(room: Room, wallIndex?: number): HTMLElement {
       'Room',
       field('Name', h('input', { type: 'text', value: room.name, onchange: (e: Event) => updRoom(room.id, (r) => (r.name = (e.target as HTMLInputElement).value)) })),
       h('div', { class: 'grid2' },
-        field('Width (X)', lengthInput(b.maxX - b.minX, (v) => updRoom(room.id, (r) => scaleRoom(r, v / (b.maxX - b.minX || 1), 1)), { min: 0.3 })),
-        field('Length (Z)', lengthInput(b.maxZ - b.minZ, (v) => updRoom(room.id, (r) => scaleRoom(r, 1, v / (b.maxZ - b.minZ || 1))), { min: 0.3 })),
+        field('Width (X)', lengthInput(b.maxX - b.minX, (v) => store.update((p) => scaleRoom(p, room.id, v / (b.maxX - b.minX || 1), 1)), { min: 0.3 })),
+        field('Length (Z)', lengthInput(b.maxZ - b.minZ, (v) => store.update((p) => scaleRoom(p, room.id, 1, v / (b.maxZ - b.minZ || 1))), { min: 0.3 })),
       ),
       h('div', { class: 'stats' }, h('span', {}, `Floor ${formatArea(area(room.points), units)}`), h('span', {}, `Perimeter ${fmt(perim)}`), h('span', {}, `${walls.length} walls`)),
       field('Floor elevation', lengthInput(room.elevation, (v) => updRoom(room.id, (r) => (r.elevation = v))), 'Raise for steps, sunken rooms or an upper floor'),
@@ -171,16 +172,13 @@ export function roomPanel(room: Room, wallIndex?: number): HTMLElement {
           store.setUI({ camera: 'walk', view: store.ui.view === 'plan' ? 'split' : store.ui.view });
         }, 'primary'),
         button('Duplicate', () => {
-          const copy: Room = JSON.parse(JSON.stringify(room));
-          copy.id = uid('room');
-          copy.name = room.name + ' copy';
-          const dx = b.maxX - b.minX;
-          copy.points = copy.points.map((p) => ({ x: p.x + dx, z: p.z }));
-          store.update((p) => p.rooms.push(copy));
-          store.select({ type: 'room', id: copy.id });
+          let copy: Room | undefined;
+          store.update((p) => (copy = duplicateRoom(p, room.id, b.maxX - b.minX)));
+          if (copy) store.select({ type: 'room', id: copy.id });
         }),
         button('Delete room', () => {
-          if (confirm(`Delete “${room.name}”?`)) store.deleteSelection();
+          const n = itemsInRoom(store.project, room).length;
+          if (confirm(`Delete “${room.name}”${n ? ` and the ${n} item${n > 1 ? 's' : ''} in it` : ''}?`)) store.deleteSelection();
         }, 'danger'),
       ),
     ),
@@ -204,11 +202,6 @@ function compassText(deg: number, ridge: boolean) {
   return ridge ? `${deg}° (${n}–${names[(Math.round(deg / 45) + 4) % 8]})` : `${deg}° (${n})`;
 }
 
-function scaleRoom(r: Room, sx: number, sz: number) {
-  const b = bounds(r.points);
-  r.points = r.points.map((p) => ({ x: b.minX + (p.x - b.minX) * sx, z: b.minZ + (p.z - b.minZ) * sz }));
-}
-
 function wallRow(room: Room, index: number, length: number, active: boolean) {
   const color = room.wallColors[index];
   const hidden = room.hiddenWalls.includes(index);
@@ -216,7 +209,7 @@ function wallRow(room: Room, index: number, length: number, active: boolean) {
     'div',
     { class: `wall-row ${active ? 'active' : ''}` },
     h('button', { class: 'wall-name', onclick: () => store.select({ type: 'wall', roomId: room.id, index }) }, `Wall ${index + 1}`),
-    lengthInput(length, (v) => updRoom(room.id, (r) => setWallLength(r, index, v)), { min: 0.1 }),
+    lengthInput(length, (v) => store.update((p) => setWallLength(p, room.id, index, v)), { min: 0.1 }),
     h('input', {
       type: 'color',
       value: color ?? room.wallColor,
@@ -234,33 +227,11 @@ function wallRow(room: Room, index: number, length: number, active: boolean) {
         button('+ Window', () => addOpening(room, index, 'window'), 'small'),
         button('+ Opening', () => addOpening(room, index, 'opening'), 'small'),
         button('+ Slider', () => addOpening(room, index, 'sliding-door'), 'small'),
-        button('Split wall', () => updRoom(room.id, (r) => {
-          const a = r.points[index];
-          const bb = r.points[(index + 1) % r.points.length];
-          r.points.splice(index + 1, 0, { x: (a.x + bb.x) / 2, z: (a.z + bb.z) / 2 });
-          // keep opening indices consistent
-          for (const o of store.project.openings) if (o.roomId === r.id && o.wallIndex > index) o.wallIndex++;
-        }), 'small'),
+        button('Split wall', () => store.update((p) => splitWall(p, room.id, index)), 'small'),
       ),
     );
   }
   return el;
-}
-
-function setWallLength(r: Room, index: number, L: number) {
-  const n = r.points.length;
-  const a = r.points[index];
-  const b = r.points[(index + 1) % n];
-  const d = { x: b.x - a.x, z: b.z - a.z };
-  const l = Math.hypot(d.x, d.z) || 1;
-  const nb = { x: a.x + (d.x / l) * L, z: a.z + (d.z / l) * L };
-  const delta = { x: nb.x - b.x, z: nb.z - b.z };
-  // For rectangles move the whole opposite side so the room stays square
-  if (n === 4) {
-    const j = (index + 2) % n;
-    r.points[(index + 1) % n] = nb;
-    r.points[j] = { x: r.points[j].x + delta.x, z: r.points[j].z + delta.z };
-  } else r.points[(index + 1) % n] = nb;
 }
 
 export const OPENING_DEFAULTS: Record<OpeningType, { w: number; h: number; sill: number; label: string }> = {
@@ -277,7 +248,12 @@ export function addOpening(room: Room, wallIndex: number, type: OpeningType) {
   if (!w) return;
   const d = OPENING_DEFAULTS[type];
   const width = Math.min(d.w, w.length - 0.1);
-  const o: Opening = { id: uid('op'), roomId: room.id, wallIndex, offset: w.length / 2, width, height: Math.min(d.h, room.wallHeight - d.sill - 0.05), sill: d.sill, type, flipHinge: false, flipSide: false, frameColor: '#ffffff' };
+  const offset = freeOpeningOffset(store.project, room, wallIndex, width);
+  if (offset === null) {
+    toast('No free space on this wall – move or resize an existing door/window first');
+    return;
+  }
+  const o: Opening = { id: uid('op'), roomId: room.id, wallIndex, offset, width, height: Math.min(d.h, room.wallHeight - d.sill - 0.05), sill: d.sill, type, flipHinge: false, flipSide: false, frameColor: '#ffffff' };
   store.update((p) => p.openings.push(o));
   store.select({ type: 'opening', id: o.id });
 }
@@ -304,9 +280,10 @@ export function openingPanel(o: Opening): HTMLElement {
         q.width = d.w;
         q.height = d.h;
         q.sill = d.sill;
+        if (wall) clampOpening(q, wall.length);
       }))),
       h('div', { class: 'grid2' },
-        field('Width', lengthInput(o.width, (v) => upd((q) => (q.width = v)), { min: 0.2 })),
+        field('Width', lengthInput(o.width, (v) => upd((q) => ((q.width = v), wall && clampOpening(q, wall.length))), { min: 0.2 })),
         field('Height', lengthInput(o.height, (v) => upd((q) => (q.height = v)), { min: 0.2 })),
         field(o.type === 'window' ? 'Sill height' : 'Bottom height', lengthInput(o.sill, (v) => upd((q) => (q.sill = v)), { min: 0 })),
         field('From wall start', lengthInput(o.offset - o.width / 2, (v) => upd((q) => (q.offset = v + q.width / 2)), { min: 0, max: wall ? wall.length - o.width : 100 })),
