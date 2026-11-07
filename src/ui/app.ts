@@ -50,6 +50,13 @@ export class App {
     setPlacementCenter(() => this.placementPoint());
     store.subscribe((r) => this.onChange(r));
     window.addEventListener('library-changed', () => this.renderLeft());
+    window.addEventListener('view-wall', (e) => {
+      const { roomId, index } = (e as CustomEvent).detail;
+      store.select({ type: 'wall', roomId, index });
+      store.setUI({ camera: 'front', view: store.ui.view === 'plan' ? 'split' : store.ui.view });
+      if (matchMedia('(max-width: 820px)').matches) this.setSheet('none');
+      this.viewer.viewWall(roomId, index);
+    });
     this.bindKeys();
     this.applyView();
     this.renderAll();
@@ -205,6 +212,7 @@ export class App {
   }
   private viewerMode: CameraMode = 'orbit';
   private pendingRender = false;
+  private lastScrolledSel = '';
   private actionBar!: HTMLElement;
 
   private renderAll() {
@@ -299,7 +307,10 @@ export class App {
     const close = h('button', { class: 'sheet-close', onclick: () => this.setSheet('none') }, 'Done');
     this.right.replaceChildren(close, panel);
     this.right.scrollTop = scroll;
-    if (store.ui.selection?.type === 'wall') this.right.querySelector('.wall-row.active')?.scrollIntoView({ block: 'nearest' });
+    // a newly selected wall opens at the top, where its Wall view (items on that wall) is
+    const selKey = JSON.stringify(store.ui.selection);
+    if (store.ui.selection?.type === 'wall' && selKey !== this.lastScrolledSel) this.right.scrollTop = 0;
+    this.lastScrolledSel = selKey;
   }
 
   // -------------------------------------------------------------------------

@@ -1270,3 +1270,67 @@ input.len.big {
 .field-hint.error {
   color: var(--danger);
 }
+
+/* wall view */
+.wall-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.wall-item {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  align-items: center;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.wall-item:hover {
+  border-color: var(--accent);
+}
+.wall-item .swatch-dot {
+  grid-row: 1 / span 2;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+}
+.wall-item-name {
+  font-weight: 600;
+  font-size: 12.5px;
+  text-transform: capitalize;
+}
+.wall-item-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+.modal.wide {
+  width: min(1060px, 100%);
+}
+.elevation-bar {
+  justify-content: center;
+  font-weight: 600;
+}
+.elevation-holder {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+.elevation-holder svg {
+  display: block;
+}
+.el-item {
+  cursor: pointer;
+}
+.el-item:hover rect:first-child,
+.el-item:focus rect:first-child {
+  stroke: #2f80ed;
+  stroke-width: 3;
+}

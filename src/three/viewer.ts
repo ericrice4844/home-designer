@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { bounds, ceilingHeightAt, itemClearances, itemCorners, openingsForWall, roomAt, roomWalls } from '../geometry';
+import { bounds, ceilingHeightAt, itemClearances, itemCorners, openingsForWall, pointInPolygon, roomAt, roomWalls } from '../geometry';
 import type { Item, Project } from '../model';
 import { moveItem } from '../placement';
 import { store, type CameraMode } from '../state';
@@ -49,6 +49,7 @@ export class Viewer {
   private edgeCache = new WeakMap<THREE.BufferGeometry, THREE.EdgesGeometry>();
   private visible = true;
   private fittedOnce = false;
+  private focusRoomId: string | null = null;
   private structureDirty = true;
   private pendingWalkPoint: { x: number; z: number } | null = null;
   private lightPool: THREE.PointLight[] = [];
@@ -310,11 +311,18 @@ export class Viewer {
       if (fade && !w.userData.exterior) fadedWalls.add(`${w.userData.roomId}:${w.userData.index}`);
     }
     // doors/windows in a cut-away wall would float in mid-air and block clicks: hide them too
+    // wall view: show only the room being looked into, so neighbouring rooms can't block the wall
+    const focus = this.focusRoomId ? store.room(this.focusRoomId) : undefined;
     this.structure?.children.forEach((o) => {
+      if (o.userData.type === 'room') o.visible = !focus || o.userData.id === focus.id;
       if (o.userData.type !== 'opening') return;
       const op = store.opening(o.userData.id);
-      o.visible = !op || !fadedWalls.has(`${op.roomId}:${op.wallIndex}`);
+      o.visible = !op || (!fadedWalls.has(`${op.roomId}:${op.wallIndex}`) && (!focus || isOnRoomEdge(op, focus)));
     });
+    for (const [id, { obj }] of this.items) {
+      const it = store.item(id);
+      obj.visible = !focus || (!!it && pointInPolygon({ x: it.x, z: it.z }, focus.points));
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -403,6 +411,7 @@ export class Viewer {
     for (const r of p.rooms) {
       const selected = (sel?.type === 'room' && sel.id === r.id) || (sel?.type === 'wall' && sel.roomId === r.id);
       if (!selected && this.mode === 'orbit') continue;
+      if (this.focusRoomId && r.id !== this.focusRoomId) continue; // wall view shows one room
       for (const w of roomWalls(r)) {
         const mid = { x: (w.a.x + w.b.x) / 2, z: (w.a.z + w.b.z) / 2 };
         const key = `${Math.round(mid.x * 20)},${Math.round(mid.z * 20)}`;
@@ -428,6 +437,7 @@ export class Viewer {
   }
 
   setMode(mode: CameraMode) {
+    this.focusRoomId = null; // any camera change leaves the single-room wall view
     const prev = this.mode;
     this.mode = mode;
     const c = this.houseCenter();
@@ -486,6 +496,29 @@ export class Viewer {
     cam.position.copy(ctrl.target).add(off);
     ctrl.update();
     this.updateCutaway();
+  }
+
+  /** Orthographic front view square-on to one wall, from inside the room (an elevation in 3D). */
+  viewWall(roomId: string, index: number) {
+    const room = store.room(roomId);
+    const wall = room && roomWalls(room).find((w) => w.index === index);
+    if (!room || !wall) return;
+    if (this.mode !== 'front') this.setMode('front');
+    this.focusRoomId = roomId;
+    const face = {
+      x: (wall.a.x + wall.b.x) / 2 + wall.inward.x * (room.wallThickness / 2),
+      z: (wall.a.z + wall.b.z) / 2 + wall.inward.z * (room.wallThickness / 2),
+    };
+    const h = Math.max(room.wallHeight, room.ceiling.type === 'flat' ? 0 : room.ceiling.peakHeight);
+    const target = new THREE.Vector3(face.x, room.elevation + h / 2, face.z);
+    // camera stands in the room looking at the wall; walls between it and the target are cut away
+    this.ortho.position.set(face.x + wall.inward.x * 40, target.y, face.z + wall.inward.z * 40);
+    this.orbitO.target.copy(target);
+    this.orbitO.maxPolarAngle = Math.PI / 2;
+    this.fitOrtho(Math.max(wall.length, h * 1.4) * 1.15);
+    this.orbitO.update();
+    this.updateCutaway();
+    this.updateSelection();
   }
 
   zoomToFit() {
@@ -798,6 +831,22 @@ function disposeTree(root: THREE.Object3D) {
         mt.dispose();
       }
     }
+  });
+}
+
+/** Is an opening on one of this room's walls (its own, or a coincident wall of the neighbour)? */
+function isOnRoomEdge(op: { roomId: string; wallIndex: number }, room: { id: string; points: { x: number; z: number }[] }) {
+  if (op.roomId === room.id) return true;
+  const other = store.room(op.roomId);
+  if (!other) return false;
+  const a = other.points[op.wallIndex];
+  const b = other.points[(op.wallIndex + 1) % other.points.length];
+  const mid = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 };
+  return room.points.some((p, i) => {
+    const q = room.points[(i + 1) % room.points.length];
+    const l2 = (q.x - p.x) ** 2 + (q.z - p.z) ** 2 || 1;
+    const t = Math.max(0, Math.min(1, ((mid.x - p.x) * (q.x - p.x) + (mid.z - p.z) * (q.z - p.z)) / l2));
+    return Math.hypot(mid.x - p.x - (q.x - p.x) * t, mid.z - p.z - (q.z - p.z) * t) < 0.1;
   });
 }
 

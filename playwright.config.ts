@@ -2,7 +2,9 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: 'tests/e2e',
-  timeout: 60_000,
+  // software-rendered WebGL is heavy: a couple of browsers at a time keeps timings stable
+  timeout: 90_000,
+  workers: 2,
   retries: process.env.CI ? 1 : 0,
   use: {
     baseURL: 'http://localhost:4173/',

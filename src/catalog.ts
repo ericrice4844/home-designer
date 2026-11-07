@@ -53,13 +53,13 @@ export const CATALOG: CatalogEntry[] = [
   { kind: 'tv', name: 'TV 65"', category: 'furniture', w: 57, d: 3, h: 33, y: 24, color: '#111111', icon: '📺' },
 
   // Kitchen cabinets
-  { kind: 'base-cabinet', name: 'Base Cabinet', category: 'kitchen', w: 24, d: 24, h: 34.5, color: CAB, accent: '#888888', countertop: true, wallSnap: true, icon: '🗄️', widths: [9, 12, 15, 18, 21, 24, 27, 30, 33, 36] },
-  { kind: 'drawer-base', name: 'Drawer Base', category: 'kitchen', w: 18, d: 24, h: 34.5, color: CAB, accent: '#888888', countertop: true, wallSnap: true, icon: '🗄️', widths: [12, 15, 18, 21, 24, 30, 36] },
-  { kind: 'sink-base', name: 'Sink Base + Sink', category: 'kitchen', w: 36, d: 24, h: 34.5, color: CAB, accent: '#888888', countertop: true, wallSnap: true, icon: '🚰', widths: [30, 33, 36, 42] },
-  { kind: 'corner-base', name: 'Corner Base', category: 'kitchen', w: 36, d: 36, h: 34.5, color: CAB, accent: '#888888', countertop: true, wallSnap: true, icon: '◢' },
+  { kind: 'base-cabinet', name: 'Base Cabinet', category: 'kitchen', w: 24, d: 24, h: 36, color: CAB, accent: '#888888', countertop: true, wallSnap: true, icon: '🗄️', widths: [9, 12, 15, 18, 21, 24, 27, 30, 33, 36] },
+  { kind: 'drawer-base', name: 'Drawer Base', category: 'kitchen', w: 18, d: 24, h: 36, color: CAB, accent: '#888888', countertop: true, wallSnap: true, icon: '🗄️', widths: [12, 15, 18, 21, 24, 30, 36] },
+  { kind: 'sink-base', name: 'Sink Base + Sink', category: 'kitchen', w: 36, d: 24, h: 36, color: CAB, accent: '#888888', countertop: true, wallSnap: true, icon: '🚰', widths: [30, 33, 36, 42] },
+  { kind: 'corner-base', name: 'Corner Base', category: 'kitchen', w: 36, d: 36, h: 36, color: CAB, accent: '#888888', countertop: true, wallSnap: true, icon: '◢' },
   { kind: 'wall-cabinet', name: 'Wall Cabinet', category: 'kitchen', w: 30, d: 12, h: 30, y: 54, color: CAB, accent: '#888888', wallSnap: true, icon: '▭', widths: [9, 12, 15, 18, 21, 24, 27, 30, 33, 36] },
   { kind: 'tall-pantry', name: 'Tall Pantry', category: 'kitchen', w: 24, d: 24, h: 84, color: CAB, accent: '#888888', wallSnap: true, icon: '🚪', widths: [18, 24, 30, 36] },
-  { kind: 'island', name: 'Kitchen Island', category: 'kitchen', w: 72, d: 36, h: 34.5, color: '#46586b', accent: '#888888', countertop: true, icon: '⬛' },
+  { kind: 'island', name: 'Kitchen Island', category: 'kitchen', w: 72, d: 36, h: 36, color: '#46586b', accent: '#888888', countertop: true, icon: '⬛' },
   { kind: 'open-shelf', name: 'Open Shelf', category: 'kitchen', w: 36, d: 10, h: 2, y: 60, color: WOOD, wallSnap: true, icon: '➖' },
 
   // Appliances
@@ -67,7 +67,7 @@ export const CATALOG: CatalogEntry[] = [
   { kind: 'range', name: 'Range / Stove', category: 'appliance', w: 30, d: 26, h: 36, color: STEEL, accent: '#222222', wallSnap: true, icon: '🔥', widths: [30, 36, 48] },
   { kind: 'cooktop', name: 'Cooktop', category: 'appliance', w: 30, d: 21, h: 1, y: 36, color: '#1b1b1b', wallSnap: true, icon: '♨️' },
   { kind: 'wall-oven', name: 'Wall Oven (double)', category: 'appliance', w: 30, d: 24, h: 84, color: CAB, accent: STEEL, wallSnap: true, icon: '🔲' },
-  { kind: 'dishwasher', name: 'Dishwasher', category: 'appliance', w: 24, d: 24, h: 34.5, color: STEEL, accent: '#333333', countertop: true, wallSnap: true, icon: '🍽️' },
+  { kind: 'dishwasher', name: 'Dishwasher', category: 'appliance', w: 24, d: 24, h: 36, color: STEEL, accent: '#333333', countertop: true, wallSnap: true, icon: '🍽️' },
   { kind: 'microwave', name: 'Over-Range Microwave', category: 'appliance', w: 30, d: 16, h: 17, y: 66, color: STEEL, accent: '#111111', wallSnap: true, icon: '📦' },
   { kind: 'range-hood', name: 'Range Hood', category: 'appliance', w: 30, d: 20, h: 30, y: 60, color: STEEL, wallSnap: true, icon: '🔺' },
   { kind: 'washer', name: 'Washer', category: 'appliance', w: 27, d: 30, h: 38, color: '#f4f4f4', accent: '#666666', wallSnap: true, icon: '🫧' },

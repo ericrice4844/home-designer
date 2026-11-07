@@ -3,6 +3,7 @@ import { area, bounds, ceilingHeightAt, centroid, maxCeilingHeight, roomAt, room
 import { FT, IN, uid, type CeilingType, type FloorType, type Item, type ItemShape, type Opening, type OpeningType, type Project, type Room } from '../model';
 import { clampOpening, duplicateRoom, freeOpeningOffset, itemsInRoom, scaleRoom, setWallLength, splitWall } from '../edits';
 import { store } from '../state';
+import { wallViewSection } from './elevation';
 import { floorPreview } from '../three/textures';
 import { formatArea, formatLength } from '../units';
 import { button, checkbox, colorInput, field, h, lengthInput, numberInput, row, section, select, slider, toast } from './dom';
@@ -56,6 +57,8 @@ export function roomPanel(room: Room, wallIndex?: number): HTMLElement {
   const units = store.project.settings.units;
   const perim = walls.reduce((s, w) => s + w.length, 0);
   const root = h('div', { class: 'panel' });
+  // a selected wall leads with what is on it (cabinets, fixtures, doors…)
+  if (wallIndex !== undefined) root.append(wallViewSection(room, wallIndex));
 
   root.append(
     section(

@@ -22,7 +22,8 @@ describe('4.1 walls: hidden walls and openings (P2, P11)', () => {
 
   it('still snaps a base cabinet under a window (sill above the counter)', () => {
     const { p, room } = roomProject();
-    addDoor(p, room, 0, 2, 'window', 0.9); // sill 0.9 m > 0.876 m cabinet
+    const win = addDoor(p, room, 0, 2, 'window', 0.9);
+    win.sill = 42 * IN; // typical kitchen window: above the 36" counter
     const cab = addItem(p, 'base-cabinet', 2, 0.4);
     expect(snapItemToWall(p, cab)).not.toBeNull();
   });
