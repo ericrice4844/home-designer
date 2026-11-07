@@ -27,8 +27,8 @@ async function start() {
     else if (s.state === 'saved') hideBanner('save');
   });
   // Don't lose the last edits when the tab is closed / backgrounded (mobile)
-  window.addEventListener('pagehide', () => void store.flush());
-  document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && void store.flush());
+  window.addEventListener('pagehide', () => store.flushOnHide());
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && store.flushOnHide());
 
   onStorageEvent((e) => {
     if (e.type === 'versionchange')
@@ -49,10 +49,11 @@ async function start() {
   }
 
   if ('serviceWorker' in navigator && import.meta.env.PROD) {
-    let reloading = false;
+    // reload only after the user accepted an update – the very first install also fires controllerchange
+    let updateAccepted = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloading) return;
-      reloading = true;
+      if (!updateAccepted) return;
+      updateAccepted = false;
       void store.flush().then(() => location.reload());
     });
     navigator.serviceWorker
@@ -60,7 +61,14 @@ async function start() {
       .then((reg) =>
         watchForUpdates(reg, () => !!navigator.serviceWorker.controller, (apply) =>
           showBanner('update', 'A new version of Home Design Studio is available.', [
-            { label: 'Update now', run: apply, primary: true },
+            {
+              label: 'Update now',
+              run: () => {
+                updateAccepted = true;
+                apply();
+              },
+              primary: true,
+            },
             { label: 'Later', run: () => hideBanner('update') },
           ], 'info'),
         ),

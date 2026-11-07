@@ -24,13 +24,15 @@ Runs entirely in the browser — no server or account. Designs auto-save locally
 ```bash
 npm install
 npm run dev      # http://localhost:5173 (also reachable from your phone on the same network)
-npm test         # unit tests (units parsing, geometry, kitchen generator)
+npm test         # unit tests (130: data safety, geometry, kitchen generator sweep, offline, a11y…)
+npm run test:e2e # Playwright smoke tests on desktop + phone (builds and serves the app itself)
 npm run build    # production build in dist/ (static files – host anywhere)
 ```
 
 ## Publishing (GitHub Pages)
 
-Every push to `main` runs `.github/workflows/deploy.yml`, which tests, builds and publishes the app to
+Every push to `main` runs `.github/workflows/deploy.yml`: type-check, unit tests, build and the Playwright
+smoke tests must all pass before the app is published to
 `https://<user>.github.io/home-designer/`. One-time setup: repo **Settings → Pages → Source: GitHub Actions**.
 On a phone, open the URL and choose *Add to Home Screen* / *Install app*.
 

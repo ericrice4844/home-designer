@@ -189,6 +189,19 @@ export class Store {
    * saves are blocked so the old record stays untouched until the user decides what to do.
    */
   async restore(): Promise<RestoreResult> {
+    // An edit made just before the last page close may only exist in the synchronous pending copy.
+    const pending = this.readPending();
+    if (pending !== undefined) {
+      try {
+        this.project = normalizeProject(pending);
+        this.emit('load');
+        const ok = await this.saveNow(); // move it into IndexedDB
+        if (ok) this.clearPending();
+        return { status: 'ok' };
+      } catch {
+        this.clearPending(); // unreadable pending copy: fall back to the last full save
+      }
+    }
     let raw: unknown;
     try {
       raw = await storage.loadProject(this.storageKey);
@@ -219,6 +232,43 @@ export class Store {
     return this.saveNow();
   }
 
+  /**
+   * Page is going away: an IndexedDB write may not finish in time, so also keep a synchronous copy
+   * of any unsaved change in localStorage. restore() picks it up next time.
+   */
+  flushOnHide() {
+    const unsaved = this.saveTimer !== undefined || this.saveStatus.state === 'saving';
+    if (unsaved && !this.saveBlocked) {
+      try {
+        localStorage.setItem(this.pendingKey, JSON.stringify(this.project));
+      } catch {
+        /* storage full or unavailable – the async save below is all we can do */
+      }
+    }
+    void this.flush();
+  }
+
+  get pendingKey() {
+    return `hds-pending-${this.storageKey}`;
+  }
+
+  private readPending(): unknown {
+    try {
+      const s = localStorage.getItem(this.pendingKey);
+      return s ? JSON.parse(s) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private clearPending() {
+    try {
+      localStorage.removeItem(this.pendingKey);
+    } catch {
+      /* ignore */
+    }
+  }
+
   async saveNow(): Promise<boolean> {
     clearTimeout(this.saveTimer);
     this.saveTimer = undefined;
@@ -226,6 +276,7 @@ export class Store {
     this.setStatus({ state: 'saving' });
     try {
       await storage.saveProject(this.storageKey, JSON.parse(JSON.stringify(this.project)));
+      this.clearPending();
       this.setStatus({ state: 'saved', at: Date.now() });
       for (const l of this.savedListeners) l();
       return true;

@@ -210,6 +210,45 @@ describe('1.4 saves are visible and safe', () => {
   });
 });
 
+describe('1.4b edits right before the page closes', () => {
+  it('flushOnHide keeps a synchronous copy that restore() uses and then saves', async () => {
+    localStorage.clear();
+    const a = new Store();
+    a.update((p) => (p.name = 'last-second edit')); // autosave still pending (400 ms)
+    vi.spyOn(storage, 'saveProject').mockImplementationOnce(() => new Promise(() => {})); // the async write never finishes (page gone)
+    a.flushOnHide();
+    expect(localStorage.getItem(a.pendingKey)).toContain('last-second edit');
+    vi.restoreAllMocks();
+    const b = new Store();
+    expect((await b.restore()).status).toBe('ok');
+    expect(b.project.name).toBe('last-second edit');
+    expect(((await storage.loadProject('current')) as any).name).toBe('last-second edit');
+    expect(localStorage.getItem(b.pendingKey)).toBeNull();
+  });
+
+  it('nothing is written when there is no unsaved change, or saves are blocked', async () => {
+    localStorage.clear();
+    const s = new Store();
+    s.flushOnHide();
+    expect(localStorage.getItem(s.pendingKey)).toBeNull();
+    s.blockSaves('other-tab');
+    s.update((p) => (p.name = 'x'));
+    s.flushOnHide();
+    expect(localStorage.getItem(s.pendingKey)).toBeNull();
+  });
+
+  it('an unreadable pending copy falls back to the last full save', async () => {
+    localStorage.clear();
+    const { p } = roomProject();
+    p.name = 'full save';
+    await storage.saveProject('current', p);
+    const s = new Store();
+    localStorage.setItem(s.pendingKey, JSON.stringify({ rooms: 'broken' }));
+    expect((await s.restore()).status).toBe('ok');
+    expect(s.project.name).toBe('full save');
+  });
+});
+
 describe('1.5 cross-tab guard', () => {
   function pair() {
     const chans: (TabChannel & { peer?: TabChannel })[] = [];
