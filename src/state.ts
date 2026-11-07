@@ -1,0 +1,219 @@
+import { cloneProject, emptyProject, normalizeProject, type Item, type Opening, type Project, type Room } from './model';
+import { storage } from './storage';
+
+export type Selection =
+  | { type: 'room'; id: string }
+  | { type: 'wall'; roomId: string; index: number }
+  | { type: 'opening'; id: string }
+  | { type: 'item'; id: string }
+  | null;
+
+export type Tool = 'select' | 'room-rect' | 'room-poly' | 'measure' | 'pan';
+
+export type ViewMode = 'plan' | '3d' | 'split';
+export type CameraMode = 'orbit' | 'iso' | 'top' | 'front' | 'side' | 'walk';
+
+export interface UIState {
+  selection: Selection;
+  tool: Tool;
+  view: ViewMode;
+  camera: CameraMode;
+  /** Catalog kind waiting to be placed with the next click on the plan. */
+  placing: string | null;
+  panel: string;
+}
+
+type Listener = (reason: ChangeReason) => void;
+export type ChangeReason = 'project' | 'ui' | 'live' | 'load';
+
+const STORAGE_KEY = 'current';
+const MAX_HISTORY = 100;
+
+class Store {
+  project: Project = emptyProject();
+  ui: UIState = { selection: null, tool: 'select', view: 'split', camera: 'orbit', placing: null, panel: 'room' };
+  private listeners = new Set<Listener>();
+  private undoStack: string[] = [];
+  private redoStack: string[] = [];
+  private saveTimer: number | undefined;
+  private liveBase: string | null = null;
+
+  subscribe(fn: Listener) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  private emit(reason: ChangeReason) {
+    for (const l of this.listeners) l(reason);
+  }
+
+  /** Apply a change as a single undoable step. */
+  update(fn: (p: Project) => void) {
+    const before = this.liveBase ?? JSON.stringify(this.project);
+    this.liveBase = null;
+    fn(this.project);
+    const after = JSON.stringify(this.project);
+    if (after === before) {
+      this.emit('project');
+      return;
+    }
+    this.undoStack.push(before);
+    if (this.undoStack.length > MAX_HISTORY) this.undoStack.shift();
+    this.redoStack = [];
+    this.emit('project');
+    this.scheduleSave();
+  }
+
+  /**
+   * Apply a continuous change (dragging, slider) without recording history for every frame.
+   * Call `commit()` when the gesture ends.
+   */
+  live(fn: (p: Project) => void) {
+    if (this.liveBase === null) this.liveBase = JSON.stringify(this.project);
+    fn(this.project);
+    this.emit('live');
+  }
+
+  commit() {
+    if (this.liveBase === null) return;
+    const before = this.liveBase;
+    this.liveBase = null;
+    if (before !== JSON.stringify(this.project)) {
+      this.undoStack.push(before);
+      if (this.undoStack.length > MAX_HISTORY) this.undoStack.shift();
+      this.redoStack = [];
+      this.scheduleSave();
+    }
+    this.emit('project');
+  }
+
+  undo() {
+    this.commit();
+    const prev = this.undoStack.pop();
+    if (!prev) return;
+    this.redoStack.push(JSON.stringify(this.project));
+    this.project = normalizeProject(JSON.parse(prev));
+    this.validateSelection();
+    this.emit('load');
+    this.scheduleSave();
+  }
+
+  redo() {
+    const next = this.redoStack.pop();
+    if (!next) return;
+    this.undoStack.push(JSON.stringify(this.project));
+    this.project = normalizeProject(JSON.parse(next));
+    this.validateSelection();
+    this.emit('load');
+    this.scheduleSave();
+  }
+
+  get canUndo() {
+    return this.undoStack.length > 0;
+  }
+  get canRedo() {
+    return this.redoStack.length > 0;
+  }
+
+  setUI(patch: Partial<UIState>) {
+    Object.assign(this.ui, patch);
+    this.emit('ui');
+  }
+
+  select(sel: Selection) {
+    this.ui.selection = sel;
+    if (sel) {
+      this.ui.panel = sel.type === 'item' ? 'item' : sel.type === 'opening' ? 'opening' : 'room';
+    }
+    this.emit('ui');
+  }
+
+  load(p: Project, resetHistory = true) {
+    this.project = normalizeProject(cloneProject(p));
+    if (resetHistory) {
+      this.undoStack = [];
+      this.redoStack = [];
+    }
+    this.ui.selection = null;
+    this.emit('load');
+    this.scheduleSave();
+  }
+
+  async restore(): Promise<boolean> {
+    const saved = await storage.loadProject(STORAGE_KEY);
+    if (saved && saved.rooms) {
+      this.project = normalizeProject(saved);
+      this.emit('load');
+      return true;
+    }
+    return false;
+  }
+
+  private scheduleSave() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => storage.saveProject(STORAGE_KEY, JSON.parse(JSON.stringify(this.project))), 400);
+  }
+
+  private validateSelection() {
+    const s = this.ui.selection;
+    if (!s) return;
+    if (s.type === 'item' && !this.item(s.id)) this.ui.selection = null;
+    if (s.type === 'room' && !this.room(s.id)) this.ui.selection = null;
+    if (s.type === 'wall' && !this.room(s.roomId)) this.ui.selection = null;
+    if (s.type === 'opening' && !this.opening(s.id)) this.ui.selection = null;
+  }
+
+  room(id: string | undefined): Room | undefined {
+    return this.project.rooms.find((r) => r.id === id);
+  }
+  item(id: string | undefined): Item | undefined {
+    return this.project.items.find((r) => r.id === id);
+  }
+  opening(id: string | undefined): Opening | undefined {
+    return this.project.openings.find((r) => r.id === id);
+  }
+
+  selectedItem(): Item | undefined {
+    const s = this.ui.selection;
+    return s?.type === 'item' ? this.item(s.id) : undefined;
+  }
+  selectedRoom(): Room | undefined {
+    const s = this.ui.selection;
+    if (s?.type === 'room') return this.room(s.id);
+    if (s?.type === 'wall') return this.room(s.roomId);
+    if (s?.type === 'opening') return this.room(this.opening(s.id)?.roomId);
+    if (s?.type === 'item') {
+      const it = this.item(s.id);
+      if (it) return this.project.rooms.find((r) => r.points.length > 2 && isInside(it.x, it.z, r));
+    }
+    return undefined;
+  }
+
+  deleteSelection() {
+    const s = this.ui.selection;
+    if (!s) return;
+    this.update((p) => {
+      if (s.type === 'item') p.items = p.items.filter((i) => i.id !== s.id);
+      if (s.type === 'opening') p.openings = p.openings.filter((o) => o.id !== s.id);
+      if (s.type === 'room') {
+        p.rooms = p.rooms.filter((r) => r.id !== s.id);
+        p.openings = p.openings.filter((o) => o.roomId !== s.id);
+      }
+    });
+    this.ui.selection = null;
+    this.emit('ui');
+  }
+}
+
+function isInside(x: number, z: number, r: Room) {
+  let inside = false;
+  const pts = r.points;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i];
+    const b = pts[j];
+    if (a.z > z !== b.z > z && x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+export const store = new Store();
