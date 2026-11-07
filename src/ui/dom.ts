@@ -1,3 +1,4 @@
+import { throttleLatest } from '../lru';
 import { store } from '../state';
 import { formatLength, parseLength } from '../units';
 
@@ -80,8 +81,13 @@ function round(v: number) {
 /** Color picker with live preview (no history spam) and a few swatches. */
 export function colorInput(value: string, onLive: (c: string) => void, swatches: string[] = []) {
   const input = h('input', { type: 'color', value: toHex(value) });
-  input.addEventListener('input', () => store.live(() => onLive(input.value)));
-  input.addEventListener('change', () => store.commit());
+  // dragging across the picker fires dozens of events per second; rebuild the 3D at most every 80 ms
+  const apply = throttleLatest((c: string) => store.live(() => onLive(c)), 80);
+  input.addEventListener('input', () => apply(input.value));
+  input.addEventListener('change', () => {
+    apply.flush();
+    store.commit();
+  });
   const wrap = h('div', { class: 'color-field' }, input);
   if (swatches.length) {
     const sw = h('div', { class: 'swatches' });

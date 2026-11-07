@@ -132,11 +132,8 @@ function buildFloor(room: Room, onAsync: () => void): THREE.Mesh {
   const geo = new THREE.ShapeGeometry(shapeFromPoints(room.points));
   geo.rotateX(-Math.PI / 2);
   const { tex, size } = floorTexture(room.floor, onAsync);
-  const t = tex.clone();
-  t.userData.ownClone = true;
-  t.needsUpdate = true;
-  t.repeat.set(1 / size, 1 / size);
-  t.rotation = room.floor.rotation;
+  void size; // repeat & rotation are baked into the cached texture
+  const t = tex;
   const m = new THREE.MeshStandardMaterial({
     map: t,
     roughness: room.floor.type === 'carpet' ? 1 : room.floor.type === 'tile' || room.floor.type === 'stone' ? 0.35 : 0.55,

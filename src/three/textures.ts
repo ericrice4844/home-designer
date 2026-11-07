@@ -1,8 +1,14 @@
 import * as THREE from 'three';
 import type { Floor } from '../model';
+import { LRUCache } from '../lru';
 import { assetUrl } from '../storage';
 
-const cache = new Map<string, { tex: THREE.Texture; size: number }>();
+/** Bounded cache: editing colors creates a new texture per color, so old ones must be freed. */
+export const FLOOR_CACHE_SIZE = 32;
+const cache = new LRUCache<string, { tex: THREE.Texture; size: number }>(FLOOR_CACHE_SIZE, (v) => v.tex.dispose());
+export function floorCacheSize() {
+  return cache.size;
+}
 
 function rng(seed: number) {
   let s = seed >>> 0 || 1;
@@ -38,7 +44,8 @@ function grain(ctx: CanvasRenderingContext2D, w: number, h: number, strength: nu
  * Build a tiling floor texture. Returns the texture and the real-world size (m) covered by one repeat.
  */
 export function floorTexture(f: Floor, onUpdate?: () => void): { tex: THREE.Texture; size: number } {
-  const key = `${f.type}|${f.color}|${f.accent}|${f.scale}|${f.imageAsset ?? ''}`;
+  // rotation is part of the key so the cached texture can be used as-is (no per-rebuild clone)
+  const key = `${f.type}|${f.color}|${f.accent}|${f.scale}|${f.imageAsset ?? ''}|${f.rotation}`;
   const hit = cache.get(key);
   if (hit) return hit;
   const S = 512;
@@ -182,7 +189,7 @@ export function floorTexture(f: Floor, onUpdate?: () => void): { tex: THREE.Text
           };
           img.src = url;
         });
-        finish(tex);
+        finish(tex, size, f.rotation);
         const res = { tex, size };
         cache.set(key, res);
         return res;
@@ -191,13 +198,15 @@ export function floorTexture(f: Floor, onUpdate?: () => void): { tex: THREE.Text
     }
   }
   const tex = new THREE.CanvasTexture(canvas);
-  finish(tex);
+  finish(tex, size, f.rotation);
   const res = { tex, size };
   cache.set(key, res);
   return res;
 }
 
-function finish(tex: THREE.Texture) {
+function finish(tex: THREE.Texture, size: number, rotation: number) {
+  tex.repeat.set(1 / size, 1 / size);
+  tex.rotation = rotation;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;

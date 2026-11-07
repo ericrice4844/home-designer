@@ -1,11 +1,15 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { bounds, ceilingHeightAt, centroid, itemClearances, itemCorners, openingsForWall, pointInPolygon, roomAt, roomWalls } from '../geometry';
+import { bounds, ceilingHeightAt, itemClearances, itemCorners, openingsForWall, roomAt, roomWalls } from '../geometry';
 import type { Item, Project } from '../model';
 import { moveItem } from '../placement';
 import { store, type CameraMode } from '../state';
 import { formatLength } from '../units';
+import { clearOverlay } from './overlay';
+import { resolvePick } from './pick';
+import { configureSunShadow } from './sun';
+import { walkCollides, walkStart } from './walk';
 import { buildHouse, buildItemGroup, itemBaseY, placeItemGroup } from './scene';
 
 const EYE = 1.62;
@@ -44,6 +48,7 @@ export class Viewer {
   private edgeCache = new WeakMap<THREE.BufferGeometry, THREE.EdgesGeometry>();
   private visible = true;
   private fittedOnce = false;
+  private pendingWalkPoint: { x: number; z: number } | null = null;
   private lightPool: THREE.PointLight[] = [];
   private lightKey = '';
   private lightsDirty = true;
@@ -83,10 +88,7 @@ export class Viewer {
     this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.bias = -0.0005;
     this.sun.shadow.normalBias = 0.02;
-    const sc = this.sun.shadow.camera;
-    sc.left = sc.bottom = -25;
-    sc.right = sc.top = 25;
-    sc.far = 120;
+    configureSunShadow(this.sun, 25);
     this.scene.add(this.sun, this.sun.target);
 
     this.ground = new THREE.Mesh(new THREE.CircleGeometry(150, 48), new THREE.MeshStandardMaterial({ color: '#c5d3b4', roughness: 1 }));
@@ -237,6 +239,7 @@ export class Viewer {
     const az = ((t - 6) / 12) * Math.PI; // east -> west
     const el = Math.max(0.05, dayFactor) * (Math.PI / 2.4);
     const c = this.houseCenter();
+    configureSunShadow(this.sun, c.size * 0.75 + 4);
     const dist = 40;
     this.sun.position.set(c.x + Math.cos(az) * Math.cos(el) * dist, Math.sin(el) * dist, c.z + Math.sin(el + 0.6) * 0.5 * dist * 0.4 + 10);
     this.sun.target.position.set(c.x, 0, c.z);
@@ -272,6 +275,7 @@ export class Viewer {
     const camPos = cam.position;
     const dirV = new THREE.Vector3();
     cam.getWorldDirection(dirV);
+    const fadedWalls = new Set<string>();
     for (const w of this.walls) {
       const m = w.material as THREE.MeshStandardMaterial;
       let fade = false;
@@ -293,17 +297,21 @@ export class Viewer {
         w.castShadow = !fade;
         for (const ch of w.children) ch.visible = !fade;
       }
+      if (fade && !w.userData.exterior) fadedWalls.add(`${w.userData.roomId}:${w.userData.index}`);
     }
+    // doors/windows in a cut-away wall would float in mid-air and block clicks: hide them too
+    this.structure?.children.forEach((o) => {
+      if (o.userData.type !== 'opening') return;
+      const op = store.opening(o.userData.id);
+      o.visible = !op || !fadedWalls.has(`${op.roomId}:${op.wallIndex}`);
+    });
   }
 
   // -------------------------------------------------------------------------
   // Selection / overlays
 
   private updateSelection() {
-    this.overlay.traverse((o) => {
-      if (o instanceof CSS2DObject) o.element.remove();
-    });
-    this.overlay.clear();
+    clearOverlay(this.overlay);
     const sel = store.ui.selection;
     const p = store.project;
     this.selBox.visible = false;
@@ -488,44 +496,12 @@ export class Viewer {
   // Walk mode
 
   private enterWalk() {
-    const p = store.project;
-    const room = store.selectedRoom() ?? p.rooms[0];
-    let pos = { x: 0, z: 0 };
-    if (room) {
-      // nearest free spot to the room centroid
-      const c = centroid(room.points);
-      const b = bounds(room.points);
-      let best: { x: number; z: number } | null = null;
-      let bd = Infinity;
-      for (let x = b.minX + 0.4; x < b.maxX - 0.3; x += 0.25)
-        for (let z = b.minZ + 0.4; z < b.maxZ - 0.3; z += 0.25) {
-          const q = { x, z };
-          if (!pointInPolygon(q, room.points) || this.collides(q)) continue;
-          const d = (x - c.x) ** 2 + (z - c.z) ** 2;
-          if (d < bd) {
-            bd = d;
-            best = q;
-          }
-        }
-      pos = best ?? c;
-    }
-    this.walk.pos.set(pos.x, 0, pos.z);
+    const start = walkStart(store.project, this.pendingWalkPoint ? { point: this.pendingWalkPoint } : { room: store.selectedRoom() });
+    this.pendingWalkPoint = null;
+    this.walk.pos.set(start.pos.x, 0, start.pos.z);
     this.walk.pitch = -0.05;
-    // look in the direction with the most open space
-    let bestYaw = 0;
-    let bestLen = -1;
-    for (let i = 0; i < 16; i++) {
-      const yaw = (i / 16) * Math.PI * 2;
-      const dir = { x: -Math.sin(yaw), z: -Math.cos(yaw) };
-      let len = 0;
-      while (len < 12 && !this.collides({ x: pos.x + dir.x * len, z: pos.z + dir.z * len })) len += 0.2;
-      if (len > bestLen) {
-        bestLen = len;
-        bestYaw = yaw;
-      }
-    }
-    this.walk.yaw = bestYaw;
-    this.walk.floorY = room?.elevation ?? 0;
+    this.walk.yaw = start.yaw;
+    this.walk.floorY = start.floorY;
     this.joystickEl.classList.remove('hidden');
     this.walkHelp.classList.remove('hidden');
     this.persp.fov = 70;
@@ -541,33 +517,7 @@ export class Viewer {
   }
 
   private collides(p: { x: number; z: number }): boolean {
-    const R = 0.22;
-    const proj = store.project;
-    for (const r of proj.rooms) {
-      for (const w of roomWalls(r)) {
-        if (r.hiddenWalls.includes(w.index)) continue;
-        const ab = { x: w.b.x - w.a.x, z: w.b.z - w.a.z };
-        const t = Math.max(0, Math.min(1, ((p.x - w.a.x) * ab.x + (p.z - w.a.z) * ab.z) / (w.length * w.length)));
-        const cx = w.a.x + ab.x * t;
-        const cz = w.a.z + ab.z * t;
-        const d = Math.hypot(p.x - cx, p.z - cz);
-        if (d > R + r.wallThickness / 2) continue;
-        // inside a walkable opening?
-        const u = t * w.length;
-        const passable = openingsForWall(proj, w).some((o) => o.opening.sill < 0.05 && o.opening.height > 1.5 && u > o.u0 + 0.05 && u < o.u1 - 0.05);
-        if (!passable) return true;
-      }
-    }
-    for (const it of proj.items) {
-      if (it.height < 0.25 || it.y > 1.2 || it.category === 'lighting' || it.kind === 'rug') continue;
-      const local = { x: p.x - it.x, z: p.z - it.z };
-      const c = Math.cos(-it.rotation);
-      const s = Math.sin(-it.rotation);
-      const lx = local.x * c - local.z * s;
-      const lz = local.x * s + local.z * c;
-      if (Math.abs(lx) < it.width / 2 + R * 0.6 && Math.abs(lz) < it.depth / 2 + R * 0.6) return true;
-    }
-    return false;
+    return walkCollides(store.project, p);
   }
 
   private updateWalk(dt: number) {
@@ -608,31 +558,7 @@ export class Viewer {
     this.raycaster.setFromCamera(this.ndc(e), this.camera());
     const targets: THREE.Object3D[] = [this.itemsGroup];
     if (this.structure) targets.push(this.structure);
-    const hits = this.raycaster.intersectObjects(targets, true);
-    for (const h of hits) {
-      const mesh = h.object as THREE.Mesh;
-      if (mesh.userData.edges) continue;
-      // skip anything hidden (e.g. ceilings in overview mode) – raycasting ignores visibility
-      let hidden = false;
-      for (let a: THREE.Object3D | null = mesh; a; a = a.parent) if (!a.visible) hidden = true;
-      if (hidden) continue;
-      const m = mesh.material as THREE.Material;
-      const isItem = (() => {
-        for (let g: THREE.Object3D | null = mesh; g; g = g.parent) if (g.userData.type === 'item') return true;
-        return false;
-      })();
-      if (!isItem && m && (m as any).opacity !== undefined && (m as any).opacity < 0.2) continue;
-      let o: THREE.Object3D | null = mesh;
-      while (o && !o.userData.type) o = o.parent;
-      if (!o) continue;
-      let g: THREE.Object3D | null = mesh;
-      while (g) {
-        if (g.userData.type === 'item' || g.userData.type === 'opening') return { data: g.userData, point: h.point };
-        g = g.parent;
-      }
-      return { data: o.userData, point: h.point };
-    }
-    return null;
+    return resolvePick(this.raycaster.intersectObjects(targets, true));
   }
 
   private bindEvents() {
@@ -721,9 +647,9 @@ export class Viewer {
       if (this.mode === 'walk') return;
       const hit = this.pick(e);
       if (hit?.data.type === 'floor') {
+        // the app reacts to the camera change and calls setMode('walk') exactly once
+        this.pendingWalkPoint = { x: hit.point.x, z: hit.point.z };
         store.setUI({ camera: 'walk' });
-        this.setMode('walk');
-        this.walk.pos.set(hit.point.x, 0, hit.point.z);
       }
     });
 
