@@ -68,7 +68,7 @@ export class App {
       ['split', '⧉', 'Plan + 3D'],
       ['3d', '3D', '3D view'],
     ];
-    this.viewSeg = h('div', { class: 'seg' }, ...views.map(([v, l, t]) => h('button', { 'data-view': v, title: t, onclick: () => store.setUI({ view: v }) }, l)));
+    this.viewSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'View' }, ...views.map(([v, l, t]) => h('button', { 'data-view': v, title: t, 'aria-label': t, onclick: () => store.setUI({ view: v }) }, l)));
     const header = h(
       'header',
       { class: 'topbar' },
@@ -81,10 +81,10 @@ export class App {
       button('?', () => this.helpModal(), 'icon', 'Help'),
     );
 
-    this.left = h('aside', { class: 'sidebar left' });
-    this.rightTabs = h('div', { class: 'tabs' });
-    this.right = h('div', { class: 'sidebar-body' });
-    const rightAside = h('aside', { class: 'sidebar right' }, this.rightTabs, this.right);
+    this.left = h('aside', { class: 'sidebar left', 'aria-label': 'Build and add items' });
+    this.rightTabs = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Inspector' });
+    this.right = h('div', { class: 'sidebar-body', role: 'tabpanel' });
+    const rightAside = h('aside', { class: 'sidebar right', 'aria-label': 'Inspector' }, this.rightTabs, this.right);
 
     this.planWrap = h('div', { class: 'view plan-view' });
     this.planWrap.addEventListener('dragover', (e) => {
@@ -121,7 +121,7 @@ export class App {
     this.camBar = h(
       'div',
       { class: 'view-bar cam-bar' },
-      h('div', { class: 'seg small' }, ...cams.map(([m, l, t]) => h('button', { 'data-cam': m, title: t, onclick: () => store.setUI({ camera: m }) }, h('span', {}, l), h('small', {}, t.split(' ')[0])))),
+      h('div', { class: 'seg small', role: 'group', 'aria-label': 'Camera' }, ...cams.map(([m, l, t]) => h('button', { 'data-cam': m, title: t, 'aria-label': t, onclick: () => store.setUI({ camera: m }) }, h('span', { 'aria-hidden': 'true' }, l), h('small', {}, t.split(' ')[0])))),
       button('⟲', () => this.viewer.rotateView(-45), 'icon', 'Rotate view left'),
       button('⟳', () => this.viewer.rotateView(45), 'icon', 'Rotate view right'),
       button('⤢', () => this.viewer.zoomToFit(), 'icon', 'Fit'),
@@ -130,7 +130,7 @@ export class App {
     );
     this.threeWrap.append(this.camBar);
 
-    this.actionBar = h('div', { class: 'action-bar hidden' });
+    this.actionBar = h('div', { class: 'action-bar hidden', role: 'toolbar', 'aria-label': 'Selected item' });
     this.views = h('main', { class: 'views' }, this.planWrap, this.threeWrap, this.actionBar);
 
     const navItems: [string, string, () => void][] = [
@@ -139,7 +139,7 @@ export class App {
       ['🍳', 'Kitchen', () => this.openRight('kitchen')],
       ['⚙', 'Settings', () => this.openRight('settings')],
     ];
-    this.mobileNav = h('nav', { class: 'mobile-nav' }, ...navItems.map(([i, l, fn]) => h('button', { onclick: fn, 'data-nav': l }, h('span', {}, i), h('small', {}, l))));
+    this.mobileNav = h('nav', { class: 'mobile-nav', 'aria-label': 'Panels' }, ...navItems.map(([i, l, fn]) => h('button', { onclick: fn, 'data-nav': l }, h('span', { 'aria-hidden': 'true' }, i), h('small', {}, l))));
     const scrim = h('div', { class: 'scrim', onclick: () => this.setSheet('none') });
 
     this.root.append(header, h('div', { class: 'workspace' }, this.left, this.views, rightAside), scrim, this.mobileNav);
@@ -261,7 +261,7 @@ export class App {
       ['kitchen', 'Kitchen'],
       ['settings', 'Settings'],
     ];
-    this.rightTabs.replaceChildren(...tabs.map(([t, l]) => h('button', { class: this.rightTab === t ? 'active' : '', onclick: () => ((this.rightTab = t), this.renderRight()) }, l)));
+    this.rightTabs.replaceChildren(...tabs.map(([t, l]) => h('button', { class: this.rightTab === t ? 'active' : '', role: 'tab', 'aria-selected': String(this.rightTab === t), onclick: () => ((this.rightTab = t), this.renderRight()) }, l)));
     // don't rebuild while the user is typing in the panel
     const active = document.activeElement as HTMLElement | null;
     if (active && this.right.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'SELECT') && (active as HTMLInputElement).type !== 'range' && (active as HTMLInputElement).type !== 'checkbox' && (active as HTMLInputElement).type !== 'color') {

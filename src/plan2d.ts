@@ -56,6 +56,8 @@ export class PlanEditor {
     this.el = container;
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'plan-canvas';
+    this.canvas.setAttribute('role', 'img');
+    this.canvas.setAttribute('aria-label', 'Floor plan editor. Use the panels to edit rooms and items.');
     container.appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d')!;
     new ResizeObserver(() => this.resize()).observe(container);
@@ -444,7 +446,7 @@ export class PlanEditor {
         store.live((proj) => {
           const it = proj.items.find((i) => i.id === d.id);
           if (it) moveItem(proj, it, p.x + d.offset.x, p.z + d.offset.z, { noSnap: e.altKey });
-        });
+        }, 'items');
         break;
       case 'rotate':
         store.live((proj) => {
@@ -453,7 +455,7 @@ export class PlanEditor {
           let a = Math.atan2(p.z - it.z, p.x - it.x) - Math.PI / 2;
           if (!e.altKey) a = snapValue(a, Math.PI / (e.shiftKey ? 4 : 12));
           it.rotation = a;
-        });
+        }, 'items');
         break;
       case 'resize':
         store.live((proj) => {
@@ -480,7 +482,7 @@ export class PlanEditor {
           it.depth = dd;
           it.x = c.x;
           it.z = c.z;
-        });
+        }, 'items');
         break;
       case 'vertex': {
         const s = this.snapPoint(p, d.roomId, d.index);

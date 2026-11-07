@@ -149,7 +149,10 @@ export function slider(value: number, min: number, max: number, step: number, on
 }
 
 export function button(label: string | Node, onClick: (e: MouseEvent) => void, cls = '', title?: string) {
-  return h('button', { class: `btn ${cls}`, onclick: onClick, title, type: 'button' }, label);
+  // icon-only buttons (⟲, ✕, 📷…) need a spoken name: use the tooltip
+  const text = typeof label === 'string' ? label : label.textContent ?? '';
+  const iconOnly = !/[a-z0-9]{2,}/i.test(text);
+  return h('button', { class: `btn ${cls}`, onclick: onClick, title, type: 'button', 'aria-label': title && iconOnly ? title : undefined }, label);
 }
 
 export function toast(msg: string, ms = 2200) {

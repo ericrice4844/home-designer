@@ -7,6 +7,7 @@ import { moveItem } from '../placement';
 import { store, type CameraMode } from '../state';
 import { formatLength } from '../units';
 import { clearOverlay } from './overlay';
+import { renderPixelRatio, structureMayHaveChanged } from './perf';
 import { resolvePick } from './pick';
 import { configureSunShadow } from './sun';
 import { walkCollides, walkStart } from './walk';
@@ -48,6 +49,7 @@ export class Viewer {
   private edgeCache = new WeakMap<THREE.BufferGeometry, THREE.EdgesGeometry>();
   private visible = true;
   private fittedOnce = false;
+  private structureDirty = true;
   private pendingWalkPoint: { x: number; z: number } | null = null;
   private lightPool: THREE.PointLight[] = [];
   private lightKey = '';
@@ -55,14 +57,17 @@ export class Viewer {
 
   constructor(container: HTMLElement) {
     this.el = container;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // no preserveDrawingBuffer: screenshot() renders and reads back in the same task instead
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setPixelRatio(renderPixelRatio(window.devicePixelRatio, matchMedia('(pointer: coarse)').matches));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.9;
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.classList.add('viewer-canvas');
+    this.renderer.domElement.setAttribute('role', 'img');
+    this.renderer.domElement.setAttribute('aria-label', '3D view of the design');
 
     this.labels = new CSS2DRenderer();
     this.labels.domElement.className = 'viewer-labels';
@@ -127,7 +132,10 @@ export class Viewer {
     this.resize();
     store.subscribe((r) => {
       if (r === 'ui') this.updateSelection();
-      else this.needsRebuild = true;
+      else {
+        this.needsRebuild = true;
+        if (structureMayHaveChanged(r, store.liveScope)) this.structureDirty = true;
+      }
     });
     this.renderer.setAnimationLoop(() => this.frame());
   }
@@ -142,14 +150,16 @@ export class Viewer {
 
   private rebuild() {
     const p = store.project;
-    const sig = JSON.stringify({ r: p.rooms, o: p.openings, s: p.settings.renderStyle });
+    // dragging furniture can't change walls: skip serialising the whole shell on those frames
+    const sig = this.structureDirty ? JSON.stringify({ r: p.rooms, o: p.openings, s: p.settings.renderStyle }) : this.structureSig;
+    this.structureDirty = false;
     if (sig !== this.structureSig) {
       this.structureSig = sig;
       if (this.structure) {
         this.scene.remove(this.structure);
         disposeTree(this.structure);
       }
-      const built = buildHouse({ ...p, items: [] }, () => (this.needsRebuild = true, this.structureSig = ''));
+      const built = buildHouse({ ...p, items: [] }, () => ((this.needsRebuild = true), (this.structureSig = ''), (this.structureDirty = true)));
       this.structure = built.group;
       this.walls = built.walls;
       this.ceilings = built.ceilings;
@@ -613,7 +623,7 @@ export class Viewer {
         store.live((p) => {
           const it = p.items.find((i) => i.id === id);
           if (it) moveItem(p, it, pt.x + off.x, pt.z + off.z, { noSnap: e.altKey });
-        });
+        }, 'items');
       }
     });
     const end = (e: PointerEvent) => {

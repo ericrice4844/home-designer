@@ -26,6 +26,7 @@ export interface UIState {
 
 type Listener = (reason: ChangeReason) => void;
 export type ChangeReason = 'project' | 'ui' | 'live' | 'load';
+export type LiveScope = 'items' | 'structure';
 
 const STORAGE_KEY = 'current';
 const MAX_HISTORY = 100;
@@ -107,8 +108,12 @@ export class Store {
    * Apply a continuous change (dragging, slider) without recording history for every frame.
    * Call `commit()` when the gesture ends.
    */
-  live(fn: (p: Project) => void) {
+  /** What the current live gesture changes: 'items' lets the 3D view skip re-checking walls every frame. */
+  liveScope: LiveScope = 'structure';
+
+  live(fn: (p: Project) => void, scope: LiveScope = 'structure') {
     if (this.liveBase === null) this.liveBase = JSON.stringify(this.project);
+    this.liveScope = scope;
     fn(this.project);
     this.emit('live');
   }

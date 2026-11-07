@@ -1,6 +1,7 @@
 import './styles.css';
 import { store } from './state';
 import { onStorageEvent } from './storage';
+import { watchForUpdates } from './swUpdate';
 import { createTabChannel, TabGuard } from './tabs';
 import { sampleHouse } from './templates';
 import { App } from './ui/app';
@@ -48,7 +49,23 @@ async function start() {
   }
 
   if ('serviceWorker' in navigator && import.meta.env.PROD) {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading) return;
+      reloading = true;
+      void store.flush().then(() => location.reload());
+    });
+    navigator.serviceWorker
+      .register('./sw.js')
+      .then((reg) =>
+        watchForUpdates(reg, () => !!navigator.serviceWorker.controller, (apply) =>
+          showBanner('update', 'A new version of Home Design Studio is available.', [
+            { label: 'Update now', run: apply, primary: true },
+            { label: 'Later', run: () => hideBanner('update') },
+          ], 'info'),
+        ),
+      )
+      .catch(() => {});
   }
 }
 
