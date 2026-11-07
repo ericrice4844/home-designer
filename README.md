@@ -9,6 +9,7 @@ Runs entirely in the browser — no server or account. Designs auto-save locally
 | Area | What you can do |
 | --- | --- |
 | **Rooms & floor plans** | Draw rectangular rooms or any polygon shape; add rooms by exact size; drag corners/walls to resize; drag whole rooms — corners snap to neighbouring rooms so multi-room plans join cleanly. Split walls, hide walls for open plans, set floor elevation (steps, sunken rooms). |
+| **Trace a floor plan** | Upload a photo or image of an existing plan, set its scale from a dimension written on it, verify with a second dimension (fixes photos taken at an angle), then draw rooms over it – corners snap to the plan's wall lines so adjacent rooms share walls. |
 | **Walls & ceilings** | Wall height and thickness, wall color (plus per-wall accent colors), baseboards. Ceilings: flat, **sloped (shed)**, **vaulted (gable)** or **tray**, with peak height, direction and pitch readout; ceiling color. |
 | **Flooring** | Hardwood, laminate, vinyl, herringbone, tile, stone, checkerboard, carpet, concrete — with color, grout/accent, plank/tile size and rotation. **Import your own pattern or photo** as flooring. |
 | **Doors, windows, openings** | Doors, double/French doors, sliding doors, windows, open passages and garage doors. Width/height/sill, position, hinge side & swing direction, trim color. Drag along any wall; openings cut through shared walls between rooms automatically. |

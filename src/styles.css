@@ -1261,3 +1261,12 @@ button:focus:not(:focus-visible) {
     scroll-behavior: auto !important;
   }
 }
+
+/* floor-plan tracing */
+input.len.big {
+  font-size: 18px;
+  padding: 10px 12px;
+}
+.field-hint.error {
+  color: var(--danger);
+}

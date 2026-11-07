@@ -22,6 +22,8 @@ import { createRoom, rectPoints, type Item, type Room, type Vec2 } from './model
 import { moveItem, placeCatalogItem } from './placement';
 import { clampRoomOpenings, finishPolygon } from './edits';
 import { store } from './state';
+import { pixelToWorld, snapToLines, worldToPixel } from './underlay';
+import { loadPlanImage, planImages } from './planImage';
 import { toast } from './ui/dom';
 import { formatArea, formatLength } from './units';
 
@@ -35,7 +37,9 @@ export type Drag =
   | { kind: 'room'; roomId: string; start: Vec2; pts0: Vec2[]; items0: { id: string; x: number; z: number }[] }
   | { kind: 'opening'; id: string }
   | { kind: 'rect'; start: Vec2; end: Vec2 }
-  | { kind: 'measure'; start: Vec2; end: Vec2 };
+  | { kind: 'measure'; start: Vec2; end: Vec2 }
+  | { kind: 'calib'; tool: 'calibrate' | 'check-dim'; start: Vec2; end: Vec2 }
+  | { kind: 'move-plan'; start: Vec2; x0: number; z0: number };
 
 export class PlanEditor {
   readonly el: HTMLElement;
@@ -48,6 +52,9 @@ export class PlanEditor {
   private poly: Vec2[] = [];
   private hover: Vec2 | null = null;
   private measure: { a: Vec2; b: Vec2 } | null = null;
+  /** Called when a calibration / check line has been drawn on the traced plan. */
+  onTwoPoints: ((tool: 'calibrate' | 'check-dim', a: Vec2, b: Vec2) => void) | null = null;
+  private calibLine: { a: Vec2; b: Vec2 } | null = null;
   private dirty = true;
   private fitted = false;
   private visible = true;
@@ -161,6 +168,18 @@ export class PlanEditor {
         if (r.id === excludeRoom && i === excludeIndex) continue;
         if (dist(r.points[i], p) < tol) return { ...r.points[i] };
       }
+    }
+    // tracing a plan: snap to the centerline of the plan's wall strokes instead of the grid
+    const u = store.project.underlay;
+    if (u?.visible && u.snap) {
+      const plan = planImages.get(u.assetId);
+      if (plan?.mask) {
+        const px = worldToPixel(u, p);
+        const radiusPx = 10 / this.view.zoom / Math.min(u.scaleX, u.scaleZ);
+        const snapped = snapToLines(plan.mask, px, radiusPx);
+        return pixelToWorld(u, { x: snapped.x ?? px.x, y: snapped.y ?? px.y });
+      }
+      return p;
     }
     if (!s.snap) return p;
     return { x: snapValue(p.x, s.gridSize), z: snapValue(p.z, s.gridSize) };
@@ -370,6 +389,17 @@ export class PlanEditor {
       this.drag = { kind: 'measure', start: s, end: s };
       return;
     }
+    if (ui.tool === 'calibrate' || ui.tool === 'check-dim') {
+      const s = this.snapPoint(p);
+      this.calibLine = null;
+      this.drag = { kind: 'calib', tool: ui.tool, start: s, end: s };
+      return;
+    }
+    if (ui.tool === 'move-plan') {
+      const u = store.project.underlay;
+      if (u && !u.locked) this.drag = { kind: 'move-plan', start: p, x0: u.x, z0: u.z };
+      return;
+    }
     // select tool
     const handle = this.hitItemHandle(e.offsetX, e.offsetY);
     const sel = store.selectedItem();
@@ -570,7 +600,15 @@ export class PlanEditor {
         break;
       case 'rect':
       case 'measure':
+      case 'calib':
         d.end = this.snapPoint(p);
+        break;
+      case 'move-plan':
+        store.live((proj) => {
+          if (!proj.underlay) return;
+          proj.underlay.x = d.x0 + (p.x - d.start.x);
+          proj.underlay.z = d.z0 + (p.z - d.start.z);
+        });
         break;
     }
   }
@@ -600,6 +638,11 @@ export class PlanEditor {
       }
     } else if (d.kind === 'measure') {
       this.measure = { a: d.start, b: d.end };
+    } else if (d.kind === 'calib') {
+      if (dist(d.start, d.end) * this.view.zoom > 8) {
+        this.calibLine = { a: d.start, b: d.end };
+        this.onTwoPoints?.(d.tool, d.start, d.end);
+      }
     } else if (d.kind !== 'pan') {
       store.commit();
     }
@@ -654,6 +697,7 @@ export class PlanEditor {
     ctx.fillStyle = dark ? '#1a1d22' : '#f7f6f3';
     ctx.fillRect(0, 0, W, H);
     this.drawGrid(dark);
+    this.drawUnderlay();
 
     const sel = store.ui.selection;
     // rooms
@@ -672,6 +716,7 @@ export class PlanEditor {
       }
     }
     // walls
+    const labelled = new Set<string>();
     for (const r of proj.rooms) {
       const t = Math.max(2, r.wallThickness * this.view.zoom);
       for (const w of roomWalls(r)) {
@@ -688,7 +733,9 @@ export class PlanEditor {
         ctx.lineTo(b.x, b.y);
         ctx.stroke();
         ctx.setLineDash([]);
-        if (proj.settings.showDimensions && w.length > 0.2) {
+        const midKey = `${Math.round(((w.a.x + w.b.x) / 2) * 50)},${Math.round(((w.a.z + w.b.z) / 2) * 50)}`;
+        if (proj.settings.showDimensions && w.length > 0.2 && !labelled.has(midKey)) {
+          labelled.add(midKey); // a wall shared by two rooms gets one label, not two on top of each other
           const mid = add(w.a, scale(w.dir, w.length / 2));
           const lp = this.toScreen(add(mid, scale(w.inward, -(r.wallThickness / 2 + 14 / this.view.zoom))));
           this.text(formatLength(w.length, units), lp.x, lp.y, isSel ? '#2f80ed' : dark ? '#bbb' : '#555', 11);
@@ -850,6 +897,8 @@ export class PlanEditor {
     }
     const m = d?.kind === 'measure' ? { a: d.start, b: d.end } : this.measure;
     if (m && store.ui.tool === 'measure') this.dimLine(m.a, m.b, formatLength(dist(m.a, m.b), units, true), '#9b51e0', 0);
+    const cl = d?.kind === 'calib' ? { a: d.start, b: d.end } : this.calibLine;
+    if (cl && (store.ui.tool === 'calibrate' || store.ui.tool === 'check-dim')) this.dimLine(cl.a, cl.b, store.ui.tool === 'calibrate' ? 'known length?' : formatLength(dist(cl.a, cl.b), units, true), '#e67e22', 0);
     if (store.ui.placing && this.hover) {
       const entry = catalogEntry(store.ui.placing);
       if (entry) {
@@ -866,6 +915,29 @@ export class PlanEditor {
     }
     // compass / north arrow and scale bar
     this.drawCompass(dark);
+  }
+
+  /** Draw the traced floor-plan image (faded) under the rooms. */
+  private drawUnderlay() {
+    const u = store.project.underlay;
+    if (!u || !u.visible) return;
+    const plan = loadPlanImage(u.assetId, () => (this.dirty = true));
+    if (!plan.img) return;
+    const ctx = this.ctx;
+    // affine map from image pixels to screen
+    const o = this.toScreen(pixelToWorld(u, { x: 0, y: 0 }));
+    const ex = this.toScreen(pixelToWorld(u, { x: 1, y: 0 }));
+    const ey = this.toScreen(pixelToWorld(u, { x: 0, y: 1 }));
+    ctx.save();
+    ctx.globalAlpha = u.opacity;
+    ctx.transform(ex.x - o.x, ex.y - o.y, ey.x - o.x, ey.y - o.y, o.x, o.y);
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(plan.img, 0, 0, u.pixelWidth, u.pixelHeight);
+    ctx.restore();
+    if (!u.calibrated) {
+      const c = this.toScreen(pixelToWorld(u, { x: u.pixelWidth / 2, y: 0 }));
+      this.pill('Not to scale yet – set the scale', c.x, Math.max(20, c.y - 14), '#e67e22');
+    }
   }
 
   private drawGrid(dark: boolean) {
@@ -1150,7 +1222,7 @@ export class PlanEditor {
 
 /** Drags that change the model through store.live() and must be committed (also when a pinch interrupts them). */
 export function dragNeedsCommit(kind: Drag['kind']): boolean {
-  return kind !== 'pan' && kind !== 'rect' && kind !== 'measure';
+  return kind !== 'pan' && kind !== 'rect' && kind !== 'measure' && kind !== 'calib';
 }
 
 function inheritDefaults(room: Room) {

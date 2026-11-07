@@ -18,7 +18,8 @@ test('draw a room, place an item, undo, and it all survives a reload', async ({ 
   await page.click('[data-view="plan"]');
   if (isMobile) await page.click('[data-nav="Add"]');
   await page.getByRole('button', { name: /Draw room/ }).click();
-  if (isMobile) await page.click('.scrim', { position: { x: 5, y: 5 } }).catch(() => {});
+  // on phones the Add sheet closes by itself once a drawing tool is picked
+  if (isMobile) await expect(page.locator('.scrim')).toBeHidden();
   const box = (await page.locator('.plan-canvas').boundingBox())!;
   const x0 = box.x + box.width * 0.1;
   const y0 = box.y + box.height * 0.08;

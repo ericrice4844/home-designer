@@ -156,6 +156,7 @@ export function button(label: string | Node, onClick: (e: MouseEvent) => void, c
 }
 
 export function toast(msg: string, ms = 2200) {
+  document.querySelectorAll('.toast').forEach((old) => old.remove()); // newest message replaces older ones
   const t = h('div', { class: 'toast' }, msg);
   document.body.append(t);
   requestAnimationFrame(() => t.classList.add('show'));

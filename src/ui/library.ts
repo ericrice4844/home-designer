@@ -3,6 +3,7 @@ import { bounds } from '../geometry';
 import { createRoom, FT, rectPoints, type ItemCategory } from '../model';
 import { store, type Tool } from '../state';
 import { button, field, h, lengthInput, section } from './dom';
+import { traceSection } from './trace';
 import { loadLibrary, openModelImport, openPhotoImport, placeLibraryEntry, saveLibrary } from './importers';
 
 let filter = '';
@@ -21,7 +22,7 @@ export function libraryPanel(opts: { place: (kind: string) => void; center: () =
     section(
       'Build',
       h('div', { class: 'tool-grid' }, ...tools.map(([t, icon, label]) => h('button', { class: `tool ${store.ui.tool === t ? 'active' : ''}`, onclick: () => store.setUI({ tool: t, placing: null }), title: label }, h('span', {}, icon), h('small', {}, label)))),
-      store.ui.tool === 'room-rect' ? h('p', { class: 'hint' }, 'Drag on the plan to draw a rectangular room. Corners snap to the grid and other rooms.') : null,
+      store.ui.tool === 'room-rect' ? h('p', { class: 'hint' }, store.project.underlay?.visible && store.project.underlay.snap ? 'Drag from corner to corner of a room on the traced plan – corners snap to its walls and to rooms you already drew.' : 'Drag on the plan to draw a rectangular room. Corners snap to the grid and other rooms.') : null,
       store.ui.tool === 'room-poly' ? h('p', { class: 'hint' }, 'Tap to add corners. Tap the first point, double-click or press Enter to finish. Backspace removes the last point.') : null,
       store.ui.tool === 'measure' ? h('p', { class: 'hint' }, 'Drag between two points to measure.') : null,
       h('div', { class: 'quick-room' },
@@ -32,6 +33,8 @@ export function libraryPanel(opts: { place: (kind: string) => void; center: () =
       h('p', { class: 'hint' }, 'New rooms are placed next to your plan — drag to snap them together.'),
     ),
   );
+
+  root.append(traceSection(opts.center));
 
   root.append(
     section(

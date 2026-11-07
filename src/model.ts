@@ -157,6 +157,31 @@ export interface Project {
   settings: Settings;
   /** Last-used kitchen designer options (saved with the project). */
   kitchen?: Record<string, unknown>;
+  /** Floor-plan image traced over in the 2D editor. */
+  underlay?: Underlay;
+}
+
+export interface Underlay {
+  assetId: string;
+  /** image size in pixels */
+  pixelWidth: number;
+  pixelHeight: number;
+  /** world position (m) of the image's top-left pixel */
+  x: number;
+  z: number;
+  /** meters per image pixel along the image's x and y axes (equal unless corrected for a skewed photo) */
+  scaleX: number;
+  scaleZ: number;
+  /** radians */
+  rotation: number;
+  opacity: number;
+  visible: boolean;
+  locked: boolean;
+  /** snap drawing to the plan's wall lines */
+  snap: boolean;
+  calibrated: boolean;
+  /** the first calibration dimension, in image pixels (used for the second-dimension check) */
+  calibration?: { a: { x: number; y: number }; b: { x: number; y: number }; length: number };
 }
 
 let idCounter = 0;
@@ -369,6 +394,31 @@ export function normalizeProject(raw: unknown): Project {
 
   if (problems.length) throw new ProjectError(problems);
   if (isObj(raw.kitchen)) p.kitchen = raw.kitchen as any;
+  const u = raw.underlay;
+  if (u !== undefined) {
+    const nums = ['pixelWidth', 'pixelHeight', 'x', 'z', 'scaleX', 'scaleZ', 'rotation', 'opacity'];
+    const pt = (q: any) => isObj(q) && isNum(q.x) && isNum(q.y);
+    if (isObj(u) && typeof u.assetId === 'string' && nums.every((k) => isNum(u[k])) && u.pixelWidth > 0 && u.pixelHeight > 0 && u.scaleX > 0 && u.scaleZ > 0) {
+      p.underlay = {
+        assetId: u.assetId,
+        pixelWidth: u.pixelWidth,
+        pixelHeight: u.pixelHeight,
+        x: u.x,
+        z: u.z,
+        scaleX: u.scaleX,
+        scaleZ: u.scaleZ,
+        rotation: u.rotation,
+        opacity: Math.max(0.05, Math.min(1, u.opacity)),
+        visible: u.visible !== false,
+        locked: !!u.locked,
+        snap: u.snap !== false,
+        calibrated: !!u.calibrated,
+      };
+      if (isObj(u.calibration) && pt(u.calibration.a) && pt(u.calibration.b) && isNum(u.calibration.length) && u.calibration.length > 0)
+        p.underlay.calibration = { a: { x: u.calibration.a.x, y: u.calibration.a.y }, b: { x: u.calibration.b.x, y: u.calibration.b.y }, length: u.calibration.length };
+    }
+    // a damaged tracing image is not worth losing the design over: it is simply dropped
+  }
   return p;
 }
 

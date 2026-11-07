@@ -9,7 +9,7 @@ export type Selection =
   | { type: 'item'; id: string }
   | null;
 
-export type Tool = 'select' | 'room-rect' | 'room-poly' | 'measure' | 'pan';
+export type Tool = 'select' | 'room-rect' | 'room-poly' | 'measure' | 'pan' | 'calibrate' | 'check-dim' | 'move-plan';
 
 export type ViewMode = 'plan' | '3d' | 'split';
 export type CameraMode = 'orbit' | 'iso' | 'top' | 'front' | 'side' | 'walk';

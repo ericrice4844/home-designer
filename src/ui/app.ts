@@ -2,6 +2,7 @@ import { catalogEntry } from '../catalog';
 import { centroid, pointInPolygon } from '../geometry';
 import { ProjectError, type Item, type Vec2 } from '../model';
 import { parseProjectFile } from '../projectFile';
+import { projectAssetIds } from '../projectAssets';
 import { hideBanner, showBanner } from './banner';
 import { buildPrintDocument } from './print';
 import { describeError } from './errors';
@@ -16,6 +17,7 @@ import { duplicateItem, emptyPanel, itemPanel, openingPanel, roomPanel, settings
 import { kitchenPanel } from './kitchenPanel';
 import { setPlacementCenter } from './importers';
 import { libraryPanel } from './library';
+import { handleTwoPoints } from './trace';
 import { shortcutFor } from './shortcuts';
 
 type RightTab = 'edit' | 'kitchen' | 'settings';
@@ -43,6 +45,7 @@ export class App {
   constructor(private root: HTMLElement) {
     this.build();
     this.plan = new PlanEditor(this.planWrap);
+    this.plan.onTwoPoints = (tool, a, b) => void handleTwoPoints(tool, a, b);
     this.viewer = new Viewer(this.threeWrap);
     setPlacementCenter(() => this.placementPoint());
     store.subscribe((r) => this.onChange(r));
@@ -173,8 +176,15 @@ export class App {
   // -------------------------------------------------------------------------
   // Rendering
 
+  private lastTool = store.ui.tool;
+
   private onChange(reason: string) {
     if (reason === 'live') return;
+    // on phones the Add sheet covers the plan: get it out of the way when a drawing/tracing tool is picked
+    if (store.ui.tool !== this.lastTool) {
+      this.lastTool = store.ui.tool;
+      if (store.ui.tool !== 'select' && matchMedia('(max-width: 820px)').matches) this.setSheet('none');
+    }
     if (store.ui.camera === 'walk' && store.ui.view === 'plan') store.ui.view = 'split';
     if (this.viewerMode !== store.ui.camera) {
       this.viewerMode = store.ui.camera;
@@ -356,12 +366,7 @@ export class App {
   private async exportProject() {
     // bundle assets (photos, models) so the file is self-contained
     const p = store.project;
-    const ids = new Set<string>();
-    for (const it of p.items) {
-      if (it.imageAsset) ids.add(it.imageAsset);
-      if (it.modelAsset) ids.add(it.modelAsset);
-    }
-    for (const r of p.rooms) if (r.floor.imageAsset) ids.add(r.floor.imageAsset);
+    const ids = projectAssetIds(p);
     const assets: Record<string, string> = {};
     for (const id of ids) {
       const b = await storage.getAsset(id);
@@ -443,6 +448,12 @@ export class App {
         <li>Drag <b>corners</b> or <b>walls</b> to resize. Select a room and drag inside it to move it — corners snap to neighbouring rooms so walls join.</li>
         <li>Select a wall to set its length, accent color, or add <b>doors, windows, openings</b>. Drag doors along walls.</li>
         <li>Room panel: wall height, thickness, colors, <b>sloped / vaulted / tray ceilings</b>, flooring (or import your own pattern).</li>
+      </ul>
+      <h4>Trace an existing floor plan</h4>
+      <ul>
+        <li><b>Upload floor plan</b> (Build panel): a photo or image of a plan with dimensions.</li>
+        <li><b>Set scale</b>: drag along a dimension written on the plan (it snaps to the wall lines) and type its length. <b>Check a 2nd dimension</b>, ideally the other way – if a photo was taken at an angle the app can stretch the plan so both are exact.</li>
+        <li>Then <b>Draw room</b> corner-to-corner over each room. Corners snap to the plan's walls and to rooms you already drew, so neighbouring rooms share their walls; add doors from each wall.</li>
       </ul>
       <h4>Furnish</h4>
       <ul>
