@@ -29,14 +29,52 @@ export type ChangeReason = 'project' | 'ui' | 'live' | 'load';
 const STORAGE_KEY = 'current';
 const MAX_HISTORY = 100;
 
-class Store {
+export type SaveStatus =
+  | { state: 'idle' }
+  | { state: 'saving' }
+  | { state: 'saved'; at: number }
+  | { state: 'error'; error: unknown }
+  | { state: 'blocked'; reason: string };
+
+export type RestoreResult = { status: 'ok' } | { status: 'empty' } | { status: 'corrupt'; raw: unknown; error: unknown };
+
+export class Store {
   project: Project = emptyProject();
   ui: UIState = { selection: null, tool: 'select', view: 'split', camera: 'orbit', placing: null, panel: 'room' };
   private listeners = new Set<Listener>();
   private undoStack: string[] = [];
   private redoStack: string[] = [];
-  private saveTimer: number | undefined;
+  private saveTimer: ReturnType<typeof setTimeout> | undefined;
   private liveBase: string | null = null;
+  private statusListeners = new Set<(s: SaveStatus) => void>();
+  /** Why autosave is paused (failed restore, another tab…); null when saving normally. */
+  saveBlocked: string | null = null;
+  saveStatus: SaveStatus = { state: 'idle' };
+  storageKey = STORAGE_KEY;
+
+  onSaveStatus(fn: (s: SaveStatus) => void) {
+    this.statusListeners.add(fn);
+    return () => this.statusListeners.delete(fn);
+  }
+
+  private setStatus(s: SaveStatus) {
+    this.saveStatus = s;
+    for (const l of this.statusListeners) l(s);
+  }
+
+  /** Stop autosaving (nothing is written) until allowSaves() is called. */
+  blockSaves(reason: string) {
+    this.saveBlocked = reason;
+    clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
+    this.setStatus({ state: 'blocked', reason });
+  }
+
+  allowSaves(saveNow = true) {
+    this.saveBlocked = null;
+    this.setStatus({ state: 'idle' });
+    if (saveNow) this.scheduleSave();
+  }
 
   subscribe(fn: Listener) {
     this.listeners.add(fn);
@@ -99,6 +137,7 @@ class Store {
   }
 
   redo() {
+    this.commit();
     const next = this.redoStack.pop();
     if (!next) return;
     this.undoStack.push(JSON.stringify(this.project));
@@ -139,19 +178,62 @@ class Store {
     this.scheduleSave();
   }
 
-  async restore(): Promise<boolean> {
-    const saved = await storage.loadProject(STORAGE_KEY);
-    if (saved && saved.rooms) {
-      this.project = normalizeProject(saved);
-      this.emit('load');
-      return true;
+  /**
+   * Load the autosaved project. A read or parse failure never falls through to "start fresh":
+   * saves are blocked so the old record stays untouched until the user decides what to do.
+   */
+  async restore(): Promise<RestoreResult> {
+    let raw: unknown;
+    try {
+      raw = await storage.loadProject(this.storageKey);
+    } catch (error) {
+      this.blockSaves('restore-failed');
+      return { status: 'corrupt', raw: undefined, error };
     }
-    return false;
+    if (raw === undefined || raw === null) return { status: 'empty' };
+    try {
+      this.project = normalizeProject(raw);
+    } catch (error) {
+      this.blockSaves('restore-failed');
+      return { status: 'corrupt', raw, error };
+    }
+    this.emit('load');
+    return { status: 'ok' };
   }
 
   private scheduleSave() {
+    if (this.saveBlocked) return;
     clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => storage.saveProject(STORAGE_KEY, JSON.parse(JSON.stringify(this.project))), 400);
+    this.saveTimer = setTimeout(() => void this.saveNow(), 400);
+  }
+
+  /** Write any pending change immediately (used on pagehide). */
+  flush(): Promise<boolean> {
+    if (this.saveTimer === undefined) return Promise.resolve(true);
+    return this.saveNow();
+  }
+
+  async saveNow(): Promise<boolean> {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
+    if (this.saveBlocked) return false;
+    this.setStatus({ state: 'saving' });
+    try {
+      await storage.saveProject(this.storageKey, JSON.parse(JSON.stringify(this.project)));
+      this.setStatus({ state: 'saved', at: Date.now() });
+      for (const l of this.savedListeners) l();
+      return true;
+    } catch (error) {
+      this.setStatus({ state: 'error', error });
+      return false;
+    }
+  }
+
+  private savedListeners = new Set<() => void>();
+  /** Called after every successful save (used to tell other tabs). */
+  onSaved(fn: () => void) {
+    this.savedListeners.add(fn);
+    return () => this.savedListeners.delete(fn);
   }
 
   private validateSelection() {

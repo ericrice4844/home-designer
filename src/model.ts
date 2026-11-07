@@ -155,6 +155,8 @@ export interface Project {
   openings: Opening[];
   items: Item[];
   settings: Settings;
+  /** Last-used kitchen designer options (saved with the project). */
+  kitchen?: Record<string, unknown>;
 }
 
 let idCounter = 0;
@@ -224,15 +226,160 @@ export function cloneProject(p: Project): Project {
   return JSON.parse(JSON.stringify(p));
 }
 
-/** Upgrade older / partial project JSON to the current shape. */
-export function normalizeProject(raw: any): Project {
+export class ProjectError extends Error {
+  constructor(public problems: string[]) {
+    super(`Not a valid project: ${problems.slice(0, 3).join('; ')}${problems.length > 3 ? ` (+${problems.length - 3} more)` : ''}`);
+    this.name = 'ProjectError';
+  }
+}
+
+const OPENING_TYPES: OpeningType[] = ['door', 'double-door', 'sliding-door', 'window', 'opening', 'garage-door'];
+const ITEM_SHAPES: ItemShape[] = ['model', 'box', 'cylinder', 'l-shape', 'footprint', 'cutout', 'gltf'];
+const CATEGORIES: ItemCategory[] = ['furniture', 'kitchen', 'appliance', 'bath', 'lighting', 'decor', 'custom'];
+const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isColor = (v: unknown): v is string => typeof v === 'string' && /^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(v);
+const MAX = 1e4; // anything farther than 10 km is not a house
+
+/**
+ * Validate and upgrade older / partial project JSON to the current shape.
+ * Throws a ProjectError listing every problem instead of returning a half-broken project.
+ */
+export function normalizeProject(raw: unknown): Project {
+  const problems: string[] = [];
+  if (!isObj(raw)) throw new ProjectError(['the file does not contain a project object']);
+  for (const key of ['rooms', 'openings', 'items'] as const) {
+    if (raw[key] !== undefined && !Array.isArray(raw[key])) problems.push(`"${key}" must be a list`);
+  }
+  if (raw.rooms === undefined && raw.items === undefined) problems.push('no "rooms" or "items" found – this is not a Home Design Studio project');
+  if (problems.length) throw new ProjectError(problems);
+
   const base = emptyProject();
-  const p: Project = { ...base, ...raw, settings: { ...base.settings, ...(raw?.settings ?? {}) } };
-  p.rooms = (raw?.rooms ?? []).map((r: any) => {
-    const d = createRoom(r.name ?? 'Room', r.points ?? []);
-    return { ...d, ...r, ceiling: { ...d.ceiling, ...(r.ceiling ?? {}) }, floor: { ...d.floor, ...(r.floor ?? {}) }, wallColors: r.wallColors ?? {}, hiddenWalls: r.hiddenWalls ?? [] };
+  const settings = isObj(raw.settings) ? raw.settings : {};
+  const p: Project = {
+    version: isNum(raw.version) ? raw.version : base.version,
+    name: typeof raw.name === 'string' ? raw.name.slice(0, 200) : base.name,
+    rooms: [],
+    openings: [],
+    items: [],
+    settings: { ...base.settings },
+  };
+  for (const [k, v] of Object.entries(settings)) {
+    const def = (base.settings as any)[k];
+    if (def !== undefined && typeof v === typeof def && (typeof v !== 'number' || Number.isFinite(v))) (p.settings as any)[k] = v;
+  }
+  if (p.settings.units !== 'imperial' && p.settings.units !== 'metric') p.settings.units = base.settings.units;
+  if (!(p.settings.gridSize > 0)) p.settings.gridSize = base.settings.gridSize;
+
+  const roomIds = new Set<string>();
+  const wallCounts = new Map<string, number>();
+  (raw.rooms ?? []).forEach((r: unknown, i: number) => {
+    const where = `room ${i + 1}`;
+    if (!isObj(r)) return problems.push(`${where} is not an object`);
+    if (typeof r.id !== 'string' || !r.id) return problems.push(`${where} has no id`);
+    if (roomIds.has(r.id)) return problems.push(`${where} repeats id "${r.id}"`);
+    if (!Array.isArray(r.points) || r.points.length < 3) return problems.push(`${where} needs at least 3 corner points`);
+    if (!r.points.every((q: any) => isObj(q) && isNum(q.x) && isNum(q.z) && Math.abs(q.x) < MAX && Math.abs(q.z) < MAX)) return problems.push(`${where} has a corner that is not a pair of numbers`);
+    for (const k of ['wallHeight', 'wallThickness'] as const) if (r[k] !== undefined && !(isNum(r[k]) && r[k] > 0 && r[k] < 100)) problems.push(`${where}: ${k} must be a positive number`);
+    const d = createRoom(typeof r.name === 'string' ? r.name : 'Room', r.points.map((q: any) => ({ x: q.x, z: q.z })));
+    const room: Room = {
+      ...d,
+      id: r.id,
+      elevation: isNum(r.elevation) ? r.elevation : 0,
+      wallHeight: isNum(r.wallHeight) && r.wallHeight > 0 ? r.wallHeight : d.wallHeight,
+      wallThickness: isNum(r.wallThickness) && r.wallThickness > 0 ? r.wallThickness : d.wallThickness,
+      wallColor: isColor(r.wallColor) ? r.wallColor : d.wallColor,
+      ceilingColor: isColor(r.ceilingColor) ? r.ceilingColor : d.ceilingColor,
+      baseboard: typeof r.baseboard === 'boolean' ? r.baseboard : d.baseboard,
+      baseboardColor: isColor(r.baseboardColor) ? r.baseboardColor : d.baseboardColor,
+      wallColors: Object.fromEntries(Object.entries(isObj(r.wallColors) ? r.wallColors : {}).filter(([k, v]) => /^\d+$/.test(k) && isColor(v))) as Record<number, string>,
+      hiddenWalls: Array.isArray(r.hiddenWalls) ? r.hiddenWalls.filter((n: unknown) => Number.isInteger(n) && (n as number) >= 0 && (n as number) < r.points.length) : [],
+      ceiling: { ...d.ceiling, ...(isObj(r.ceiling) ? pickValid(r.ceiling, d.ceiling) : {}) },
+      floor: { ...d.floor, ...(isObj(r.floor) ? pickValid(r.floor, d.floor) : {}) },
+    };
+    if (isObj(r.floor) && typeof r.floor.imageAsset === 'string') room.floor.imageAsset = r.floor.imageAsset;
+    roomIds.add(room.id);
+    wallCounts.set(room.id, room.points.length);
+    p.rooms.push(room);
   });
-  p.openings = raw?.openings ?? [];
-  p.items = raw?.items ?? [];
+
+  (raw.openings ?? []).forEach((o: unknown, i: number) => {
+    const where = `opening ${i + 1}`;
+    if (!isObj(o)) return problems.push(`${where} is not an object`);
+    if (!roomIds.has(o.roomId)) return problems.push(`${where} belongs to a room that does not exist`);
+    if (!Number.isInteger(o.wallIndex) || o.wallIndex < 0 || o.wallIndex >= (wallCounts.get(o.roomId) ?? 0)) return problems.push(`${where} is on a wall that does not exist`);
+    for (const k of ['offset', 'width', 'height']) if (!isNum(o[k]) || o[k] < 0) return problems.push(`${where}: ${k} must be a non-negative number`);
+    if (!(o.width > 0 && o.height > 0)) return problems.push(`${where} has zero size`);
+    p.openings.push({
+      id: typeof o.id === 'string' ? o.id : uid('op'),
+      roomId: o.roomId,
+      wallIndex: o.wallIndex,
+      offset: o.offset,
+      width: o.width,
+      height: o.height,
+      sill: isNum(o.sill) && o.sill >= 0 ? o.sill : 0,
+      type: OPENING_TYPES.includes(o.type) ? o.type : 'door',
+      flipHinge: !!o.flipHinge,
+      flipSide: !!o.flipSide,
+      frameColor: isColor(o.frameColor) ? o.frameColor : '#ffffff',
+    });
+  });
+
+  (raw.items ?? []).forEach((it: unknown, i: number) => {
+    const where = `item ${i + 1}${isObj(it) && typeof it.name === 'string' ? ` (“${it.name.slice(0, 30)}”)` : ''}`;
+    if (!isObj(it)) return problems.push(`${where} is not an object`);
+    if (!isNum(it.x) || !isNum(it.z) || Math.abs(it.x) > MAX || Math.abs(it.z) > MAX) return problems.push(`${where} has no valid position`);
+    for (const k of ['width', 'depth', 'height']) if (!(isNum(it[k]) && it[k] > 0 && it[k] < 1000)) return problems.push(`${where}: ${k} must be a positive number`);
+    const item: Item = {
+      id: typeof it.id === 'string' && it.id ? it.id : uid('item'),
+      kind: typeof it.kind === 'string' ? it.kind : 'box',
+      name: typeof it.name === 'string' ? it.name.slice(0, 200) : 'Item',
+      category: CATEGORIES.includes(it.category) ? it.category : 'custom',
+      x: it.x,
+      z: it.z,
+      y: isNum(it.y) ? it.y : 0,
+      rotation: isNum(it.rotation) ? it.rotation : 0,
+      width: it.width,
+      depth: it.depth,
+      height: it.height,
+      color: isColor(it.color) ? it.color : '#9aa7b4',
+      accent: isColor(it.accent) ? it.accent : '#666666',
+      shape: ITEM_SHAPES.includes(it.shape) ? it.shape : 'box',
+    };
+    if (Array.isArray(it.footprint) && it.footprint.every((q: any) => isObj(q) && isNum(q.x) && isNum(q.z))) item.footprint = it.footprint.map((q: any) => ({ x: q.x, z: q.z }));
+    if (isNum(it.legRatio)) item.legRatio = it.legRatio;
+    for (const k of ['imageAsset', 'modelAsset'] as const) if (typeof it[k] === 'string') item[k] = it[k];
+    if (it.modelFormat === 'gltf' || it.modelFormat === 'obj') item.modelFormat = it.modelFormat;
+    if (typeof it.countertop === 'boolean') item.countertop = it.countertop;
+    if (isColor(it.countertopColor)) item.countertopColor = it.countertopColor;
+    if (typeof it.locked === 'boolean') item.locked = it.locked;
+    if (isObj(it.light)) {
+      const L = it.light;
+      item.light = {
+        kind: L.kind === 'spot' ? 'spot' : 'point',
+        color: isColor(L.color) ? L.color : '#ffe2b8',
+        intensity: isNum(L.intensity) && L.intensity >= 0 ? L.intensity : 4,
+        range: isNum(L.range) && L.range > 0 ? L.range : 6,
+        on: L.on !== false,
+      };
+    }
+    if (item.shape === 'gltf' && !item.modelAsset) item.shape = 'box';
+    p.items.push(item);
+  });
+
+  if (problems.length) throw new ProjectError(problems);
+  if (isObj(raw.kitchen)) p.kitchen = raw.kitchen as any;
   return p;
+}
+
+/** Copy keys from src whose type matches the default (finite numbers only). */
+function pickValid<T extends object>(src: Record<string, any>, defaults: T): Partial<T> {
+  const out: any = {};
+  for (const [k, def] of Object.entries(defaults)) {
+    const v = src[k];
+    if (v === undefined || typeof v !== typeof def) continue;
+    if (typeof v === 'number' && !Number.isFinite(v)) continue;
+    out[k] = v;
+  }
+  return out;
 }

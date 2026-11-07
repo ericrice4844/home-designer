@@ -1,6 +1,10 @@
 import { catalogEntry } from '../catalog';
 import { centroid, pointInPolygon } from '../geometry';
-import { normalizeProject, type Item, type Vec2 } from '../model';
+import { ProjectError, type Item, type Vec2 } from '../model';
+import { parseProjectFile } from '../projectFile';
+import { hideBanner, showBanner } from './banner';
+import { buildPrintDocument } from './print';
+import { describeError } from './errors';
 import { placeCatalogItem } from '../placement';
 import { PlanEditor } from '../plan2d';
 import { store, type CameraMode, type ViewMode } from '../state';
@@ -369,17 +373,30 @@ export class App {
   private async importProject() {
     const f = await pickFile('.json,application/json');
     if (!f) return;
+    let parsed;
     try {
-      const json = JSON.parse(await f.text());
-      const proj = json.project ?? json;
-      for (const [id, url] of Object.entries<string>(json.assets ?? {})) await storage.putAsset(id, await dataUrlToBlob(url));
-      store.load(normalizeProject(proj));
-      this.plan.fit();
-      this.viewer.zoomToFit();
-      toast('Project opened');
+      parsed = parseProjectFile(await f.text());
     } catch (e) {
-      toast('That file is not a valid project');
+      const problems = e instanceof ProjectError ? e.problems : [String((e as Error)?.message ?? e)];
+      const list = h('ul', {}, ...problems.slice(0, 12).map((t) => h('li', {}, t)));
+      modal('Could not open that file', h('div', {}, h('p', {}, `“${f.name}” was not opened and your current design is unchanged.`), list));
+      return;
     }
+    const { project, assets } = parsed;
+    const msg = store.project.rooms.length || store.project.items.length
+      ? `Replace the current design “${store.project.name}” with “${project.name}” (${project.rooms.length} rooms, ${project.items.length} items)? Export first if you want to keep the current one.`
+      : `Open “${project.name}”?`;
+    if (!confirm(msg)) return;
+    try {
+      for (const [id, url] of Object.entries(assets)) await storage.putAsset(id, await dataUrlToBlob(url));
+    } catch (e) {
+      showBanner('import', `Photos/models from the file could not be stored (${describeError(e)}). The design was not replaced.`, [{ label: 'Dismiss', run: () => hideBanner('import') }]);
+      return;
+    }
+    store.load(project);
+    this.plan.fit();
+    this.viewer.zoomToFit();
+    toast('Project opened');
   }
 
   private screenshot() {
@@ -390,9 +407,8 @@ export class App {
   private printPlan() {
     const url = this.plan.snapshot();
     const w = window.open('', '_blank');
-    if (!w) return;
-    w.document.write(`<title>${store.project.name} – plan</title><style>body{margin:0}img{max-width:100%}</style><h2 style="font-family:system-ui">${store.project.name}</h2><img src="${url}" onload="setTimeout(()=>print(),200)">`);
-    w.document.close();
+    if (!w) return toast('Allow pop-ups to print the plan');
+    buildPrintDocument(w.document, store.project.name, url);
   }
 
   templatesModal() {

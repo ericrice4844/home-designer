@@ -7,6 +7,19 @@ import { moveItem } from '../placement';
 import { store } from '../state';
 import { storage } from '../storage';
 import { button, checkbox, field, h, lengthInput, modal, pickFile, select, toast } from './dom';
+import { hideBanner, showBanner } from './banner';
+import { describeError } from './errors';
+
+/** Store an imported file; on failure tell the user (it would otherwise vanish on reload). */
+async function safePutAsset(id: string, blob: Blob): Promise<boolean> {
+  try {
+    await storage.putAsset(id, blob);
+    return true;
+  } catch (e) {
+    showBanner('asset', `Could not save the imported file: ${describeError(e)}. It was not added. Free up space or export your project.`, [{ label: 'Dismiss', run: () => hideBanner('asset') }]);
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Personal library (saved custom pieces)
@@ -449,7 +462,7 @@ export async function openPhotoImport(capture = false) {
       out.getContext('2d')!.putImageData(data, -ob.x, -ob.y);
       const blob: Blob = await new Promise((r) => out.toBlob((b) => r(b!), 'image/png'));
       const assetId = uid('img');
-      await storage.putAsset(assetId, blob);
+      if (!(await safePutAsset(assetId, blob))) return;
       const c = getCenter();
       const it: Item = {
         id: uid('item'),
@@ -508,7 +521,7 @@ export async function openModelImport() {
   const lower = file.name.toLowerCase();
   const format: 'gltf' | 'obj' = lower.endsWith('.obj') ? 'obj' : 'gltf';
   const assetId = uid('model');
-  await storage.putAsset(assetId, file);
+  if (!(await safePutAsset(assetId, file))) return;
   const url = URL.createObjectURL(file);
   let obj: THREE.Object3D;
   try {
@@ -599,7 +612,7 @@ export async function importPatternImage(): Promise<string | null> {
   ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, S, S);
   const blob: Blob = await new Promise((r) => c.toBlob((b) => r(b!), 'image/jpeg', 0.9));
   const id = uid('pat');
-  await storage.putAsset(id, blob);
+  if (!(await safePutAsset(id, blob))) return null;
   return id;
 }
 
