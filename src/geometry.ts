@@ -466,3 +466,53 @@ export function normalizeAngle(a: number): number {
   const t = Math.PI * 2;
   return ((a % t) + t) % t;
 }
+
+// ---------------------------------------------------------------------------
+// Overlap detection (for generators and tests)
+
+/** Convex pieces of an item's footprint (L-shaped pieces are split in two). */
+export function convexParts(it: Item): Vec2[][] {
+  const o = itemOutline(it);
+  if (o.length === 6 && (it.kind === 'corner-base' || it.shape === 'l-shape')) {
+    // outline: o0→o1 back edge, o2 end of the back strip, o3 inner corner, o4/o5 the leg's front.
+    const p = add(o[0], sub(o[2], o[1])); // back-strip corner under the leg
+    return [
+      [o[0], o[1], o[2], p],
+      [p, o[3], o[4], o[5]],
+    ];
+  }
+  return [o];
+}
+
+function convexOverlap(a: Vec2[], b: Vec2[], tol: number): boolean {
+  for (const poly of [a, b]) {
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i];
+      const q = poly[(i + 1) % poly.length];
+      const n = norm({ x: -(q.z - p.z), z: q.x - p.x });
+      let minA = Infinity,
+        maxA = -Infinity,
+        minB = Infinity,
+        maxB = -Infinity;
+      for (const v of a) {
+        const d = dot(v, n);
+        minA = Math.min(minA, d);
+        maxA = Math.max(maxA, d);
+      }
+      for (const v of b) {
+        const d = dot(v, n);
+        minB = Math.min(minB, d);
+        maxB = Math.max(maxB, d);
+      }
+      if (maxA - tol <= minB || maxB - tol <= minA) return false;
+    }
+  }
+  return true;
+}
+
+/** Do two items occupy the same space (footprints overlap by more than `tol` and heights overlap)? */
+export function itemsOverlap(a: Item, b: Item, tol = 0.005): boolean {
+  if (a.y + a.height <= b.y + tol || b.y + b.height <= a.y + tol) return false;
+  for (const pa of convexParts(a)) for (const pb of convexParts(b)) if (pa.length >= 3 && pb.length >= 3 && convexOverlap(pa, pb, tol)) return true;
+  return false;
+}

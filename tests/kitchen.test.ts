@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { pointInPolygon } from '../src/geometry';
-import { analyzeKitchen, generateKitchenFor, splitWidths, type KitchenLayout } from '../src/kitchen';
+import { analyzeKitchen, generateKitchenSafe, splitWidths, type KitchenLayout } from '../src/kitchen';
 import { createRoom, emptyProject, FT, rectPoints } from '../src/model';
 
 const opts = {
@@ -29,9 +29,10 @@ describe('generateKitchen', () => {
   for (const layout of layouts) {
     it(`builds a ${layout} kitchen inside the room`, () => {
       const p = emptyProject();
-      const r = createRoom('Kitchen', rectPoints(0, 0, 16 * FT, 14 * FT));
+      const r = createRoom('Kitchen', rectPoints(0, 0, 18 * FT, 17 * FT));
       p.rooms.push(r);
-      const items = generateKitchenFor(p, r, { ...opts, layout });
+      const { items, layout: used } = generateKitchenSafe(p, r, { ...opts, layout });
+      expect(used).toBe(layout); // an 18×17 ft room fits every layout
       expect(items.length).toBeGreaterThan(4);
       for (const it of items) expect(pointInPolygon({ x: it.x, z: it.z }, r.points)).toBe(true);
       const kinds = new Set(items.map((i) => i.kind));

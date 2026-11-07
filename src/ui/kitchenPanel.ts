@@ -1,10 +1,10 @@
 import { CATALOG } from '../catalog';
 import { pointInPolygon, roomWalls } from '../geometry';
-import { analyzeKitchen, generateKitchenFor, LAYOUT_LABELS, type KitchenLayout, type KitchenOptions } from '../kitchen';
+import { analyzeKitchen, generateKitchenSafe, isReplaceableKitchenItem, kitchenOptionsFrom, LAYOUT_LABELS, type KitchenLayout, type KitchenOptions } from '../kitchen';
 import type { Room } from '../model';
 import { store } from '../state';
 import { formatLength } from '../units';
-import { button, checkbox, field, h, row, section, select } from './dom';
+import { button, checkbox, field, h, row, section, select, toast } from './dom';
 
 const CABINET_STYLES: [string, string][] = [
   ['#ffffff', 'Pure white'],
@@ -38,21 +38,12 @@ const HANDLES: [string, string][] = [
   ['#b87333', 'Copper'],
 ];
 
-const opts: KitchenOptions = {
-  layout: 'L',
-  wallIndex: 0,
-  wallCabinets: true,
-  cabinetColor: '#f3f1ec',
-  countertopColor: '#f2f0eb',
-  applianceColor: '#c9ccd1',
-  handleColor: '#888888',
-  islandColor: '#33475b',
-  replace: true,
-};
 
-const KITCHEN_KINDS = new Set(CATALOG.filter((c) => c.category === 'kitchen' || c.category === 'appliance').map((c) => c.kind));
 
 export function kitchenPanel(onPlace: (kind: string) => void): HTMLElement {
+  // options live in the project so they are saved, undoable and come back after a reload
+  const opts: KitchenOptions = kitchenOptionsFrom(store.project);
+  const save = () => store.update((p) => (p.kitchen = { ...opts }));
   const room = store.selectedRoom() ?? store.project.rooms.find((r) => /kitchen/i.test(r.name)) ?? store.project.rooms[0];
   const units = store.project.settings.units;
   const root = h('div', { class: 'panel' });
@@ -67,7 +58,7 @@ export function kitchenPanel(onPlace: (kind: string) => void): HTMLElement {
 
   const swatchRow = (list: [string, string][], value: string, set: (c: string) => void) =>
     h('div', { class: 'swatches labeled' }, ...list.map(([c, l]) => h('button', { class: `swatch ${c === value ? 'active' : ''}`, title: l, style: { background: c }, onclick: () => (set(c), rerender()) })));
-  const rerender = () => root.replaceWith(kitchenPanel(onPlace));
+  const rerender = save;
 
   root.append(
     section(
@@ -76,6 +67,7 @@ export function kitchenPanel(onPlace: (kind: string) => void): HTMLElement {
       field('Layout', select<KitchenLayout>(opts.layout, Object.entries(LAYOUT_LABELS) as [KitchenLayout, string][], (v) => ((opts.layout = v), rerender()))),
       field('Main wall', select(String(opts.wallIndex), walls.map((w) => [String(w.index), `Wall ${w.index + 1} — ${formatLength(w.length, units)}`] as [string, string]), (v) => {
         opts.wallIndex = Number(v);
+        save();
         store.select({ type: 'wall', roomId: room.id, index: opts.wallIndex });
       }), 'Tip: tap a wall in the plan to choose it'),
       layoutDiagram(opts.layout),
@@ -84,17 +76,22 @@ export function kitchenPanel(onPlace: (kind: string) => void): HTMLElement {
       field('Appliances', swatchRow(FINISHES, opts.applianceColor, (c) => (opts.applianceColor = c))),
       field('Hardware', swatchRow(HANDLES, opts.handleColor, (c) => (opts.handleColor = c))),
       opts.layout.includes('island') ? field('Island', swatchRow(CABINET_STYLES, opts.islandColor, (c) => (opts.islandColor = c))) : null,
-      checkbox(opts.wallCabinets, 'Upper wall cabinets & range hood', (v) => (opts.wallCabinets = v)),
-      checkbox(opts.replace, 'Replace existing cabinets/appliances in this room', (v) => (opts.replace = v)),
+      checkbox(opts.wallCabinets, 'Upper wall cabinets & range hood', (v) => ((opts.wallCabinets = v), save())),
+      checkbox(opts.replace, 'Replace existing cabinets/appliances in this room (keeps laundry & furniture)', (v) => ((opts.replace = v), save())),
       row(
         button('✨ Generate kitchen', () => {
           const r = store.room(room.id)!;
+          let warning: string | undefined;
           store.update((p) => {
-            if (opts.replace) p.items = p.items.filter((i) => !(KITCHEN_KINDS.has(i.kind) && pointInPolygon({ x: i.x, z: i.z }, r.points)));
-            p.items.push(...generateKitchenFor(p, r, opts));
+            if (opts.replace) p.items = p.items.filter((i) => !(isReplaceableKitchenItem(i) && pointInPolygon({ x: i.x, z: i.z }, r.points)));
+            const res = generateKitchenSafe(p, r, opts);
+            warning = res.warning;
+            p.items.push(...res.items);
+            p.kitchen = { ...opts };
           });
+          if (warning) toast(warning, 6000);
         }, 'primary'),
-        button('Apply finishes to existing', () => applyFinishes(room)),
+        button('Apply finishes to existing', () => applyFinishes(room, opts)),
       ),
     ),
   );
@@ -129,10 +126,12 @@ export function kitchenPanel(onPlace: (kind: string) => void): HTMLElement {
   return root;
 }
 
-function applyFinishes(room: Room) {
+function applyFinishes(room: Room, opts: KitchenOptions) {
   store.update((p) => {
+    p.kitchen = { ...opts };
     for (const it of p.items) {
       if (!pointInPolygon({ x: it.x, z: it.z }, room.points)) continue;
+      if (!isReplaceableKitchenItem(it) && it.category !== 'kitchen') continue;
       if (it.category === 'kitchen') {
         it.color = it.kind === 'island' ? opts.islandColor : opts.cabinetColor;
         it.accent = opts.handleColor;

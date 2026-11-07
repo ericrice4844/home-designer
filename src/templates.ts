@@ -1,6 +1,6 @@
 import { catalogEntry, createItem } from './catalog';
 import { roomWalls } from './geometry';
-import { generateKitchenFor } from './kitchen';
+import { generateKitchenSafe } from './kitchen';
 import { createRoom, emptyProject, FT, IN, rectPoints, uid, type Item, type Opening, type OpeningType, type Project, type Room } from './model';
 
 function op(room: Room, wallIndex: number, offsetFt: number, type: OpeningType, widthIn: number, heightIn: number, sillIn = 0): Opening {
@@ -73,8 +73,8 @@ export function sampleHouse(): Project {
 
   // Kitchen: generated L + island
   const kw = roomWalls(kitchen).find((w) => w.index === 3)!;
-  const kitchenItems = generateKitchenFor(p, kitchen, {
-    layout: 'L+island',
+  const kitchenOpts = {
+    layout: 'L+island' as const,
     wallIndex: kw.index,
     wallCabinets: true,
     cabinetColor: '#f3f1ec',
@@ -83,7 +83,9 @@ export function sampleHouse(): Project {
     handleColor: '#3b3b3b',
     islandColor: '#3f5468',
     replace: true,
-  });
+  };
+  const kitchenItems = generateKitchenSafe(p, kitchen, kitchenOpts).items;
+  p.kitchen = { ...kitchenOpts };
   p.items.push(...kitchenItems);
   const island = kitchenItems.find((i) => i.kind === 'island');
   if (island) {
@@ -114,10 +116,11 @@ export function sampleHouse(): Project {
   );
   // Bedroom
   p.items.push(
-    put('bed', 4, 20, -90),
-    put('nightstand', 0.9, 16.6, -90),
-    put('nightstand', 0.9, 23.4, -90),
-    put('table-lamp', 0.9, 23.4, -90, { y: 24 * IN }),
+    // headboard against the west wall; nightstands just clear of the 64" wide bed
+    put('bed', 3.75, 20, -90),
+    put('nightstand', 0.9, 16.25, -90),
+    put('nightstand', 0.9, 23.75, -90),
+    put('table-lamp', 0.9, 23.75, -90, { y: 24 * IN }),
     put('dresser', 10, 25.3, 180),
     put('wall-art', 0.25, 20, -90, { y: 54 * IN }),
     put('ceiling-light', 7, 20, 0, {}, 9),
@@ -125,7 +128,7 @@ export function sampleHouse(): Project {
   // Bath
   p.items.push(put('bathtub', 18, 15.5, 0), put('toilet', 15.4, 21.5, -90), put('vanity', 18, 25.1, 180, { width: 48 * IN }), put('mirror', 18, 25.9, 180, { y: 40 * IN }), put('ceiling-light', 18, 20, 0, {}, 8));
   // Office
-  p.items.push(put('desk', 30.8, 20, 90), put('office-chair', 29.4, 20, -90), put('bookshelf', 24, 25.5, 180), put('ceiling-light', 27, 20, 0, {}, 9));
+  p.items.push(put('desk', 30.65, 20, 90), put('office-chair', 28.4, 20, -90), put('bookshelf', 24, 25.5, 180), put('ceiling-light', 27, 20, 0, {}, 9));
   return p;
 }
 
@@ -144,19 +147,19 @@ export function kitchenStarter(): Project {
   const r = createRoom('Kitchen', rectPoints(0, 0, 16 * FT, 13 * FT), { floor: { type: 'stone', color: '#d6d0c4', accent: '#a69f92', scale: 24 * IN, rotation: 0 } });
   p.rooms.push(r);
   p.openings.push(op(r, 0, 8, 'window', 42, 40, 42), op(r, 2, 12, 'opening', 48, 84));
-  p.items.push(
-    ...generateKitchenFor(p, r, {
-      layout: 'U',
-      wallIndex: 0,
-      wallCabinets: true,
-      cabinetColor: '#33475b',
-      countertopColor: '#f2f0eb',
-      applianceColor: '#c9ccd1',
-      handleColor: '#c8a45a',
-      islandColor: '#33475b',
-      replace: true,
-    }),
-  );
+  const opts = {
+    layout: 'U' as const,
+    wallIndex: 0,
+    wallCabinets: true,
+    cabinetColor: '#33475b',
+    countertopColor: '#f2f0eb',
+    applianceColor: '#c9ccd1',
+    handleColor: '#c8a45a',
+    islandColor: '#33475b',
+    replace: true,
+  };
+  p.items.push(...generateKitchenSafe(p, r, opts).items);
+  p.kitchen = { ...opts };
   return p;
 }
 

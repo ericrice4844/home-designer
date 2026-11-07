@@ -1,6 +1,6 @@
 import { catalogEntry, createItem } from './catalog';
-import { add, dist, openingsForWall, roomWalls, scale, type Wall } from './geometry';
-import { IN, type Item, type Project, type Room } from './model';
+import { add, convexParts, dist, itemOutline, itemsOverlap, openingsForWall, pointInPolygon, roomWalls, scale, type Wall } from './geometry';
+import { IN, type Item, type Project, type Room, type Vec2 } from './model';
 
 export type KitchenLayout = 'I' | 'L' | 'U' | 'galley' | 'I+island' | 'L+island' | 'U+island';
 
@@ -16,6 +16,35 @@ export interface KitchenOptions {
   islandColor: string;
   /** Replace existing kitchen items in this room. */
   replace: boolean;
+  /** Which appliance arrangement to use (the safe generator picks the best). */
+  variant?: number;
+}
+
+export const DEFAULT_KITCHEN_OPTIONS: KitchenOptions = {
+  layout: 'L',
+  wallIndex: 0,
+  wallCabinets: true,
+  cabinetColor: '#f3f1ec',
+  countertopColor: '#f2f0eb',
+  applianceColor: '#c9ccd1',
+  handleColor: '#888888',
+  islandColor: '#33475b',
+  replace: true,
+};
+
+/** The kitchen designer options saved with the project (validated, with defaults for anything missing). */
+export function kitchenOptionsFrom(project: Project): KitchenOptions {
+  const saved = (project.kitchen ?? {}) as Record<string, unknown>;
+  const o: KitchenOptions = { ...DEFAULT_KITCHEN_OPTIONS };
+  for (const [k, def] of Object.entries(DEFAULT_KITCHEN_OPTIONS)) if (typeof saved[k] === typeof def) (o as any)[k] = saved[k];
+  if (!(o.layout in LAYOUT_LABELS)) o.layout = DEFAULT_KITCHEN_OPTIONS.layout;
+  return o;
+}
+
+/** Items "Replace existing" may remove: cabinets & kitchen appliances – never laundry or furniture. */
+export function isReplaceableKitchenItem(it: Item): boolean {
+  if (it.kind === 'washer' || it.kind === 'dryer') return false;
+  return it.category === 'kitchen' || (it.category === 'appliance' && !it.modelAsset);
 }
 
 export const LAYOUT_LABELS: Record<KitchenLayout, string> = {
@@ -122,12 +151,30 @@ export function generateKitchen(project: Project, room: Room, opts: KitchenOptio
   const R = (kind: string, w: number): Mod => ({ kind, w });
   const F = (weight = 1): Mod => ({ fill: weight });
 
+  const v = opts.variant ?? 0;
+  const fridge = R('refrigerator', 36);
+  const range = R('range', 30);
+  const sink = R('sink-base', 36);
+  const dw = R('dishwasher', 24);
+  const pick = <T,>(list: T[]) => list[v % list.length];
   if (base === 'I') {
-    const r = mk(w0, [R('refrigerator', 36), F(0.5), R('range', 30), F(1), R('sink-base', 36), R('dishwasher', 24), F(0.6)]);
+    const r = mk(w0, pick([
+      [fridge, F(0.5), range, F(1), sink, dw, F(0.6)],
+      [F(0.4), fridge, F(0.3), sink, dw, F(0.6), range, F(0.5)],
+      [F(0.6), sink, dw, F(0.4), range, F(0.3), fridge, F(0.4)],
+    ]));
     if (r) runs.push(r);
   } else if (base === 'L') {
-    const a = mk(w0, [R('refrigerator', 36), F(0.6), R('range', 30), F(1)], 'end');
-    const b = mk(next, [F(1), R('sink-base', 36), R('dishwasher', 24), F(0.6)], 'start');
+    // run a ends in the corner, run b starts there
+    const [ma, mb] = pick<[Mod[], Mod[]]>([
+      [[fridge, F(0.6), range, F(1)], [F(1), sink, dw, F(0.6)]],
+      [[F(1), range, F(0.5)], [F(0.4), sink, dw, F(0.3), fridge, F(0.6)]],
+      [[F(1), fridge, F(0.3), range, F(0.4)], [F(0.4), sink, dw, F(1)]],
+      [[F(1), range, F(0.4)], [F(0.3), sink, dw, fridge, F(1)]],
+      [[F(1), sink, dw, F(0.4)], [F(0.4), range, F(0.3), fridge, F(1)]],
+    ]);
+    const a = mk(w0, ma, 'end');
+    const b = mk(next, mb, 'start');
     if (a && b && isAtEnd(a, room) && isAtStart(b, room)) {
       a.cornerEnd = true;
       b.cornerStart = true;
@@ -135,9 +182,17 @@ export function generateKitchen(project: Project, room: Room, opts: KitchenOptio
     if (a) runs.push(a);
     if (b) runs.push(b);
   } else if (base === 'U') {
-    const a = mk(prev, [R('refrigerator', 36), F(1)], 'end');
-    const b = mk(w0, [F(1), R('sink-base', 36), R('dishwasher', 24), F(1)]);
-    const c = mk(next, [F(1), R('range', 30), F(1)], 'start');
+    const [ma, mb, mc] = pick<[Mod[], Mod[], Mod[]]>([
+      [[fridge, F(1)], [F(1), sink, dw, F(1)], [F(1), range, F(1)]],
+      [[F(1), fridge, F(0.3)], [F(1), sink, dw, F(1)], [F(0.3), range, F(1)]],
+      [[F(1), fridge], [F(1), sink, dw, F(1)], [range, F(1)]],
+      [[F(1), range, F(0.3)], [F(1), sink, dw, F(1)], [F(0.3), fridge, F(1)]],
+      [[F(1)], [F(0.6), sink, dw, F(0.4), fridge, F(0.1)], [F(0.3), range, F(1)]],
+      [[F(1), range, F(0.3)], [F(0.1), fridge, F(0.4), sink, dw, F(0.6)], [F(1)]],
+    ]);
+    const a = mk(prev, ma, 'end');
+    const b = mk(w0, mb);
+    const c = mk(next, mc, 'start');
     if (a && b && isAtEnd(a, room) && isAtStart(b, room)) {
       a.cornerEnd = true;
       b.cornerStart = true;
@@ -148,8 +203,13 @@ export function generateKitchen(project: Project, room: Room, opts: KitchenOptio
     }
     for (const r of [a, b, c]) if (r) runs.push(r);
   } else {
-    const a = mk(w0, [F(1), R('sink-base', 36), R('dishwasher', 24), F(1)]);
-    const b = mk(opposite, [R('refrigerator', 36), F(1), R('range', 30), F(1)]);
+    const [ma, mb] = pick<[Mod[], Mod[]]>([
+      [[F(1), sink, dw, F(1)], [fridge, F(1), range, F(1)]],
+      [[F(1), sink, dw, F(1)], [F(1), range, F(0.4), fridge, F(0.6)]],
+      [[F(1), sink, dw, F(1)], [F(0.6), fridge, F(0.4), range, F(1)]],
+    ]);
+    const a = mk(w0, ma);
+    const b = mk(opposite, mb);
     for (const r of [a, b]) if (r) runs.push(r);
   }
 
@@ -180,37 +240,46 @@ function buildRun(run: Run, room: Room, opts: KitchenOptions): Item[] {
     u1 -= 36 * IN;
     cornerEndItem = makeAt('corner-base', 36, run.wall, room, u1 + 18 * IN, opts);
   }
-  let lengthIn = (u1 - u0) / IN;
-  const fixed = run.mods.reduce((s, m) => s + ('w' in m ? m.w : 0), 0);
-  // drop appliances that do not fit (keep at least the sink)
+  const lengthIn = Math.max(0, (u1 - u0) / IN);
+  // drop appliances that do not fit, least important first (the sink stays as long as it fits)
   const mods = [...run.mods];
-  while (fixed > lengthIn && mods.some((m) => 'w' in m && m.kind !== 'sink-base')) {
-    const i = mods.findIndex((m) => 'w' in m && (m.kind === 'dishwasher' || m.kind === 'range' || m.kind === 'refrigerator'));
-    if (i < 0) break;
-    mods.splice(i, 1);
-    lengthIn = (u1 - u0) / IN;
-    if (mods.reduce((s, m) => s + ('w' in m ? m.w : 0), 0) <= lengthIn) break;
+  const fixedSum = () => mods.reduce((sum, m) => sum + ('w' in m ? m.w : 0), 0);
+  for (const kind of ['dishwasher', 'range', 'refrigerator', 'sink-base']) {
+    if (fixedSum() <= lengthIn) break;
+    const i = mods.findIndex((m) => 'w' in m && m.kind === kind);
+    if (i >= 0) mods.splice(i, 1);
   }
-  const fixed2 = mods.reduce((s, m) => s + ('w' in m ? m.w : 0), 0);
-  const weights = mods.reduce((s, m) => s + ('fill' in m ? m.fill : 0), 0) || 1;
-  const remaining = Math.max(0, lengthIn - fixed2);
-  let u = u0;
-  let drawerToggle = false;
-  for (const m of mods) {
-    if ('w' in m) {
-      const it = makeAt(m.kind, m.w, run.wall, room, u + (m.w * IN) / 2, opts);
-      items.push(it);
-      u += m.w * IN;
-    } else {
-      const len = (remaining * m.fill) / weights;
-      for (const w of splitWidths(len)) {
-        const kind = drawerToggle && w <= 24 ? 'drawer-base' : 'base-cabinet';
-        drawerToggle = !drawerToggle;
-        items.push(makeAt(kind, w, run.wall, room, u + (w * IN) / 2, opts));
-        u += w * IN;
+  const weights = mods.reduce((sum, m) => sum + ('fill' in m ? m.fill : 0), 0) || 1;
+  const remaining = Math.max(0, lengthIn - fixedSum());
+  // fill lengths; fold slivers (< 9") into another fill so no 5" "cabinets" appear
+  const fills = mods.map((m) => ('fill' in m ? (remaining * m.fill) / weights : 0));
+  for (let i = 0; i < fills.length; i++) {
+    if (fills[i] > 0 && fills[i] < 9) {
+      const j = fills.reduce((bi, v, k) => (k !== i && v > (fills[bi] ?? -1) ? k : bi), -1);
+      if (j >= 0 && fills[j] > 0) {
+        fills[j] += fills[i];
+        fills[i] = 0;
       }
     }
   }
+  let u = u0;
+  let drawerToggle = false;
+  mods.forEach((m, i) => {
+    if ('w' in m) {
+      items.push(makeAt(m.kind, m.w, run.wall, room, u + (m.w * IN) / 2, opts));
+      u += m.w * IN;
+      return;
+    }
+    if (fills[i] < 0.25) return;
+    for (const w of splitWidths(fills[i])) {
+      const kind = w < 9 ? 'base-cabinet' : drawerToggle && w <= 24 ? 'drawer-base' : 'base-cabinet';
+      drawerToggle = !drawerToggle;
+      const it = makeAt(kind, w, run.wall, room, u + (w * IN) / 2, opts);
+      if (w < 9) it.name = `Filler ${Math.round(w * 10) / 10}"`;
+      items.push(it);
+      u += w * IN;
+    }
+  });
   if (cornerEndItem) items.push(cornerEndItem);
 
   if (opts.wallCabinets) {
@@ -218,31 +287,32 @@ function buildRun(run: Run, room: Room, opts: KitchenOptions): Item[] {
     for (const it of [...items]) {
       const center = projectU(run.wall, it);
       const half = it.width / 2;
+      const wIn = it.width / IN; // exact width: rounding made uppers wider than their bases
       if (overlapsWindow(run, center - half, center + half, room)) continue;
       if (it.kind === 'range') {
-        const hood = makeAt('range-hood', Math.round(it.width / IN), run.wall, room, center, opts, 20);
+        const hood = makeAt('range-hood', wIn, run.wall, room, center, opts, 20);
         hood.y = 60 * IN;
+        hood.height = Math.min(hood.height, Math.max(0.3, room.wallHeight - hood.y - 0.02));
         uppers.push(hood);
         continue;
       }
       if (it.kind === 'refrigerator') {
         const top = it.y + it.height;
-        const h = Math.max(0, 84 * IN - top);
+        const h = Math.min(84 * IN, room.wallHeight - 0.02) - top;
         if (h > 0.2) {
-          const wc = makeAt('wall-cabinet', Math.round(it.width / IN), run.wall, room, center, opts, 24);
+          const wc = makeAt('wall-cabinet', wIn, run.wall, room, center, opts, 24);
           wc.y = top + 0.01;
-          wc.height = h;
+          wc.height = h - 0.01;
           uppers.push(wc);
         }
         continue;
       }
+      if (wIn < 9) continue; // no upper over a filler strip
       if (it.kind === 'corner-base') {
-        const wc = makeAt('wall-cabinet', 24, run.wall, room, center + 6 * IN, opts, 12);
-        uppers.push(wc);
+        uppers.push(makeAt('wall-cabinet', 24, run.wall, room, center + 6 * IN, opts, 12));
         continue;
       }
-      const wc = makeAt('wall-cabinet', Math.round(it.width / IN), run.wall, room, center, opts, 12);
-      uppers.push(wc);
+      uppers.push(makeAt('wall-cabinet', wIn, run.wall, room, center, opts, 12));
     }
     items.push(...uppers);
   }
@@ -290,28 +360,154 @@ function makeAt(kind: string, widthIn: number, wall: Wall, room: Room, u: number
   return it;
 }
 
+export const AISLE = 42 * IN;
+export const ISLAND_WALL_GAP = 36 * IN;
+
+/** Smallest distance between two non-overlapping convex polygons. */
+function polyDistance(a: Vec2[], b: Vec2[]): number {
+  let d = Infinity;
+  for (const [p, q] of [
+    [a, b],
+    [b, a],
+  ])
+    for (const v of p)
+      for (let i = 0; i < q.length; i++) {
+        const s0 = q[i];
+        const s1 = q[(i + 1) % q.length];
+        const ex = s1.x - s0.x;
+        const ez = s1.z - s0.z;
+        const t = Math.max(0, Math.min(1, ((v.x - s0.x) * ex + (v.z - s0.z) * ez) / (ex * ex + ez * ez || 1)));
+        d = Math.min(d, Math.hypot(v.x - s0.x - ex * t, v.z - s0.z - ez * t));
+      }
+  return d;
+}
+
+/** Is the island at least AISLE from every floor unit and ISLAND_WALL_GAP from every wall face? */
+export function islandFits(room: Room, island: Item, items: Item[]): boolean {
+  const outline = itemOutline(island);
+  if (!outline.every((q) => pointInPolygon(q, room.points))) return false;
+  for (const w of roomWalls(room)) {
+    const a = add(w.a, scale(w.inward, room.wallThickness / 2));
+    const b = add(w.b, scale(w.inward, room.wallThickness / 2));
+    if (polyDistance(outline, [a, b]) < ISLAND_WALL_GAP - 1e-6) return false;
+  }
+  for (const it of items) {
+    if (!isFloorUnit(it)) continue;
+    for (const part of convexParts(it)) {
+      if (polysOverlap(outline, part) || polyDistance(outline, part) < AISLE - 1e-6) return false;
+    }
+  }
+  return true;
+}
+
+function polysOverlap(a: Vec2[], b: Vec2[]): boolean {
+  for (const poly of [a, b])
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i];
+      const q = poly[(i + 1) % poly.length];
+      const n = { x: -(q.z - p.z), z: q.x - p.x };
+      const proj = (v: Vec2) => v.x * n.x + v.z * n.z;
+      const pa = a.map(proj);
+      const pb = b.map(proj);
+      if (Math.max(...pa) <= Math.min(...pb) + 1e-9 || Math.max(...pb) <= Math.min(...pa) + 1e-9) return false;
+    }
+  return true;
+}
 function placeIsland(room: Room, w0: Wall, _opp: Wall, items: Item[], opts: KitchenOptions): Item | null {
-  // place island parallel to the main wall, leaving a 42" aisle in front of the counters
   const entry = catalogEntry('island')!;
   const isl = createItem(entry, 0, 0);
   isl.color = opts.islandColor;
   isl.accent = opts.handleColor;
   isl.countertopColor = opts.countertopColor;
-  const counterDepth = 25.5 * IN;
-  const aisle = 42 * IN;
-  const mid = w0.length / 2;
-  const off = room.wallThickness / 2 + counterDepth + aisle + isl.depth / 2;
-  const p = add(add(w0.a, scale(w0.dir, mid)), scale(w0.inward, off));
-  // fit length to the main wall run (at most 8ft, at least 4ft)
-  const runLen = Math.max(48 * IN, Math.min(96 * IN, w0.length - 2 * (room.wallThickness + aisle + 24 * IN)));
-  isl.width = Math.round(runLen / (6 * IN)) * 6 * IN;
-  isl.x = p.x;
-  isl.z = p.z;
+  // depth of what actually stands on the main wall (a 30" fridge is deeper than a 24" counter)
+  const faceRot = Math.atan2(-w0.inward.x, w0.inward.z);
+  const onWall = items.filter((i) => isFloorUnit(i) && Math.abs(Math.sin((i.rotation - faceRot) / 2)) < 0.01);
+  const runDepth = onWall.length ? Math.max(...onWall.map((i) => i.depth)) : 0;
+  const off = room.wallThickness / 2 + runDepth + AISLE + isl.depth / 2;
   // seating overhang faces away from the main run
   isl.rotation = Math.atan2(w0.inward.x, -w0.inward.z);
-  void items;
-  return isl;
+  const p = add(add(w0.a, scale(w0.dir, w0.length / 2)), scale(w0.inward, off));
+  isl.x = p.x;
+  isl.z = p.z;
+  for (let wIn = 96; wIn >= 48; wIn -= 6) {
+    isl.width = wIn * IN;
+    if (islandFits(room, isl, items)) return isl;
+  }
+  return null;
 }
+
+const FALLBACKS: Record<KitchenLayout, KitchenLayout[]> = {
+  'U+island': ['U+island', 'U', 'L', 'I'],
+  'L+island': ['L+island', 'L', 'I'],
+  'I+island': ['I+island', 'I'],
+  U: ['U', 'L', 'I'],
+  L: ['L', 'I'],
+  galley: ['galley', 'I'],
+  I: ['I'],
+};
+
+/** Everything that would make a generated kitchen unusable. Empty when the layout is sound. */
+export function kitchenProblems(room: Room, items: Item[], layout: KitchenLayout): string[] {
+  const problems: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    if (!pointInPolygon(items[i], room.points)) problems.push(`${items[i].name} does not fit in the room`);
+    for (let j = i + 1; j < items.length; j++) if (itemsOverlap(items[i], items[j])) problems.push(`${items[i].name} overlaps ${items[j].name}`);
+  }
+  const aisle = narrowestAisle(items);
+  if (aisle < AISLE - 1e-6) problems.push(`work aisle only ${(aisle / IN).toFixed(0)}"`);
+  if (layout.includes('island') && !items.some((i) => i.kind === 'island')) problems.push('no room for an island with 42" aisles');
+  for (const k of ['sink-base', 'range', 'refrigerator']) if (!items.some((i) => i.kind === k)) problems.push(`no room for the ${k.replace('-base', '')}`);
+  return problems;
+}
+
+/**
+ * Generate the requested layout, or – if the room is too small for it – the closest smaller layout that fits.
+ * Never returns overlapping cabinets: if even a single wall does not work, the problems are reported.
+ */
+export function generateKitchenSafe(project: Project, room: Room, opts: KitchenOptions): { items: Item[]; layout: KitchenLayout; warning?: string } {
+  let firstProblems: string[] = [];
+  for (const layout of FALLBACKS[opts.layout]) {
+    // try each appliance arrangement; keep the problem-free one with the best work triangle
+    let best: { items: Item[]; score: number } | null = null;
+    for (let variant = 0; variant < 6; variant++) {
+      const items = generateKitchenFor(project, room, { ...opts, layout, variant });
+      const problems = kitchenProblems(room, items, layout);
+      if (problems.length) {
+        if (!firstProblems.length && layout === opts.layout) firstProblems = problems;
+        continue;
+      }
+      const score = triangleScore(items);
+      if (!best || score < best.score - 1e-9) best = { items, score };
+      if (score === 0) break;
+    }
+    if (best)
+      return layout === opts.layout
+        ? { items: best.items, layout }
+        : { items: best.items, layout, warning: `${LAYOUT_LABELS[opts.layout]} doesn’t fit this room (${firstProblems[0] ?? 'not enough space'}), so a ${LAYOUT_LABELS[layout].toLowerCase()} layout was used instead.` };
+    if (!firstProblems.length) firstProblems = ['not enough space'];
+  }
+  // nothing fits cleanly: keep only the pieces that don't collide, and say so
+  const items = generateKitchenFor(project, room, { ...opts, layout: 'I' });
+  const kept: Item[] = [];
+  for (const it of items) if (pointInPolygon(it, room.points) && !kept.some((k) => itemsOverlap(k, it))) kept.push(it);
+  return { items: kept, layout: 'I', warning: `This room is too small for a full kitchen: ${firstProblems.slice(0, 2).join('; ')}.` };
+}
+
+/** How far the work triangle is outside the guidelines (0 = all legs 4'–9' and total 13'–26'). */
+export function triangleScore(items: Item[]): number {
+  const sink = items.find((i) => i.kind === 'sink-base');
+  const cook = items.find((i) => i.kind === 'range' || i.kind === 'cooktop');
+  const fridge = items.find((i) => i.kind === 'refrigerator');
+  if (!sink || !cook || !fridge) return 100;
+  const legs = [
+    [sink, cook],
+    [cook, fridge],
+    [fridge, sink],
+  ].map(([a, b]) => dist(frontCenter(a), frontCenter(b)));
+  const out = (v: number, lo: number, hi: number) => Math.max(0, lo - v, v - hi);
+  return legs.reduce((sum, l) => sum + out(l, 4 * FT_M, 9 * FT_M), 0) + out(legs[0] + legs[1] + legs[2], 13 * FT_M, 26 * FT_M);
+}
+const FT_M = 0.3048;
 
 /** Entry point that also remembers the project so window detection works. */
 export function generateKitchenFor(project: Project, room: Room, opts: KitchenOptions): Item[] {
@@ -377,23 +573,9 @@ export function analyzeKitchen(project: Project, room: Room | undefined, fmt: (m
     const [l, r] = landing(items, fridge);
     checks.push({ ok: Math.max(l, r) >= 15 * IN - 0.01, label: 'Refrigerator landing area', detail: `${fmt(Math.max(l, r))} counter beside handle side (≥ 15")` });
   }
-  // aisle widths: front of every base unit to the nearest obstacle in front
-  let minAisle = Infinity;
-  for (const it of items) {
-    if (!(it.countertop || it.kind === 'range' || it.kind === 'refrigerator')) continue;
-    const front = frontCenter(it);
-    const dirF = { x: -Math.sin(it.rotation), z: Math.cos(it.rotation) };
-    for (const o of items) {
-      if (o === it || !(o.countertop || o.kind === 'island' || o.kind === 'range' || o.kind === 'refrigerator')) continue;
-      const rel = { x: o.x - front.x, z: o.z - front.z };
-      const along = rel.x * dirF.x + rel.z * dirF.z;
-      const lateral = Math.abs(-rel.x * dirF.z + rel.z * dirF.x);
-      if (along <= 0 || lateral > (o.width + it.width) / 2) continue;
-      // approximate the other item's half-extent toward us
-      const ext = Math.abs(Math.cos(o.rotation - it.rotation)) * o.depth / 2 + Math.abs(Math.sin(o.rotation - it.rotation)) * o.width / 2;
-      minAisle = Math.min(minAisle, along - ext);
-    }
-  }
+  // aisle widths: from the front of every floor unit straight ahead to the nearest floor unit, using
+  // real outlines (actual depths – fridges are deeper than counters – and corner cabinets' L shapes)
+  const minAisle = narrowestAisle(items);
   if (isFinite(minAisle)) checks.push({ ok: minAisle >= 42 * IN - 0.01, label: 'Work aisle width', detail: `${fmt(minAisle)} narrowest (42" min, 48" for two cooks)` });
   const counterLen = items.filter((i) => i.countertop).reduce((s, i) => s + i.width, 0);
   checks.push({ ok: counterLen >= 13 * FT ? true : null, label: 'Total countertop frontage', detail: `${fmt(counterLen)} (≥ 13' recommended)` });
@@ -424,6 +606,40 @@ export function frontCenter(it: Item) {
 function edgeGap(a: Item, b: Item) {
   const d = dist({ x: a.x, z: a.z }, { x: b.x, z: b.z });
   return Math.max(0, d - a.width / 2 - b.width / 2);
+}
+
+/** Cabinets/appliances standing on the floor that form work surfaces or block an aisle. */
+export function isFloorUnit(it: Item): boolean {
+  return (it.category === 'kitchen' || it.category === 'appliance') && it.y < 0.3 && it.height > 0.5 && !['washer', 'dryer'].includes(it.kind);
+}
+
+/** Narrowest clear distance in front of any floor unit to another floor unit facing it (Infinity if none). */
+export function narrowestAisle(items: Item[]): number {
+  const units = items.filter(isFloorUnit);
+  let min = Infinity;
+  for (const it of units) {
+    if (it.kind === 'corner-base') continue; // its open face is diagonal; neighbours measure past it
+    const f = frontCenter(it);
+    const fwd = { x: -Math.sin(it.rotation), z: Math.cos(it.rotation) };
+    const side = { x: Math.cos(it.rotation), z: Math.sin(it.rotation) };
+    for (const o of units) {
+      if (o === it) continue;
+      let alongMin = Infinity;
+      let latMin = Infinity;
+      let latMax = -Infinity;
+      for (const q of itemOutline(o)) {
+        const rel = { x: q.x - f.x, z: q.z - f.z };
+        alongMin = Math.min(alongMin, rel.x * fwd.x + rel.z * fwd.z);
+        const lat = rel.x * side.x + rel.z * side.z;
+        latMin = Math.min(latMin, lat);
+        latMax = Math.max(latMax, lat);
+      }
+      // only things in front of this unit's face, overlapping its width
+      if (alongMin < -0.01 || latMax <= -it.width / 2 + 0.01 || latMin >= it.width / 2 - 0.01) continue;
+      min = Math.min(min, Math.max(0, alongMin));
+    }
+  }
+  return min;
 }
 
 /** Countertop length immediately to the left / right of an item (contiguous run on the same plane). */
