@@ -17,6 +17,9 @@ import {
 import type { Item, Opening, Project, Room, Vec2 } from '../model';
 import { buildItemObject, mat } from './items';
 import { floorTexture } from './textures';
+import { applyItemFinishes, finishMaterial } from './finishes';
+import { PATTERNS, wallFinishOf } from '../materials';
+import type { Finish } from '../model';
 
 export const EXTERIOR_COLOR = '#d8d2c8';
 
@@ -64,7 +67,7 @@ export function buildHouse(project: Project, onAsync: () => void): BuiltHouse {
     rg.name = room.name;
     rg.userData = { type: 'room', id: room.id };
     rg.add(buildFloor(room, onAsync));
-    const ceil = buildCeiling(room);
+    const ceil = buildCeiling(room, onAsync);
     ceilings.push(ceil);
     rg.add(ceil);
     for (const wall of roomWalls(room)) {
@@ -72,7 +75,7 @@ export function buildHouse(project: Project, onAsync: () => void): BuiltHouse {
       const shared = isSharedWall(project, wall);
       const ops = openingsForWall(project, wall);
       const color = room.wallColors[wall.index] ?? room.wallColor;
-      const inner = buildWallMesh(room, wall, ops, 0, room.wallThickness / 2, color);
+      const inner = buildWallMesh(room, wall, ops, 0, room.wallThickness / 2, color, false, wallFinishOf(room, wall.index), onAsync);
       inner.userData = { type: 'wall', roomId: room.id, index: wall.index, inward: wall.inward };
       walls.push(inner);
       rg.add(inner);
@@ -102,6 +105,7 @@ export function buildHouse(project: Project, onAsync: () => void): BuiltHouse {
 
 export function buildItemGroup(project: Project, it: Item, onAsync: () => void): THREE.Group {
   const obj = buildItemObject(it, onAsync);
+  if (it.shape !== 'gltf') applyItemFinishes(obj, it, onAsync);
   const g = new THREE.Group();
   g.add(obj);
   placeItemGroup(project, it, g);
@@ -136,7 +140,7 @@ function buildFloor(room: Room, onAsync: () => void): THREE.Mesh {
   const t = tex;
   const m = new THREE.MeshStandardMaterial({
     map: t,
-    roughness: room.floor.type === 'carpet' ? 1 : room.floor.type === 'tile' || room.floor.type === 'stone' ? 0.35 : 0.55,
+    roughness: PATTERNS[room.floor.type]?.roughness ?? 0.55,
   });
   const mesh = new THREE.Mesh(geo, m);
   mesh.position.y = room.elevation;
@@ -159,10 +163,12 @@ function liftedShape(pts: Vec2[], heightAt: (p: Vec2) => number, elev: number, h
   return geo;
 }
 
-function buildCeiling(room: Room): THREE.Group {
+function buildCeiling(room: Room, onAsync: () => void): THREE.Group {
   const g = new THREE.Group();
   g.userData = { type: 'ceiling', roomId: room.id };
-  const m = new THREE.MeshStandardMaterial({ color: room.ceilingColor, side: THREE.DoubleSide, roughness: 0.9 });
+  const m = room.ceilingFinish
+    ? finishMaterial(room.ceilingFinish, onAsync, { side: THREE.DoubleSide })
+    : new THREE.MeshStandardMaterial({ color: room.ceilingColor, side: THREE.DoubleSide, roughness: 0.9 });
   const c = room.ceiling;
   const h = (p: Vec2) => ceilingHeightAt(room, p);
   if (c.type === 'gable') {
@@ -186,6 +192,8 @@ function buildCeiling(room: Room): THREE.Group {
       const y0 = room.elevation + room.wallHeight;
       const y1 = room.elevation + peak;
       geo.setAttribute('position', new THREE.Float32BufferAttribute([a.x, y0, a.z, b.x, y0, b.z, b.x, y1, b.z, a.x, y0, a.z, b.x, y1, b.z, a.x, y1, a.z], 3));
+      const L = Math.hypot(b.x - a.x, b.z - a.z);
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, y0, L, y0, L, y1, 0, y0, L, y1, 0, y1], 2));
       geo.computeVertexNormals();
       g.add(new THREE.Mesh(geo, m));
     }
@@ -203,7 +211,7 @@ function buildCeiling(room: Room): THREE.Group {
  * Build one layer of a wall between offsets [o0, o1] measured along the wall's "right" normal
  * (we build inner layers on the inward side).
  */
-function buildWallMesh(room: Room, wall: Wall, ops: ReturnType<typeof openingsForWall>, o0: number, o1: number, color: string, exterior = false): THREE.Mesh {
+function buildWallMesh(room: Room, wall: Wall, ops: ReturnType<typeof openingsForWall>, o0: number, o1: number, color: string, exterior = false, finish?: Finish, onAsync: () => void = () => {}): THREE.Mesh {
   const t = room.wallThickness;
   const ext = exterior ? t / 2 : 0;
   const L = wall.length;
@@ -242,7 +250,9 @@ function buildWallMesh(room: Room, wall: Wall, ops: ReturnType<typeof openingsFo
   basis.setPosition(wall.a.x + right.x * zStart, room.elevation, wall.a.z + right.z * zStart);
   geo.applyMatrix4(basis);
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: 0.92, side: THREE.DoubleSide }));
+  // the extruded wall's UVs are in meters along the wall and up from the floor, so patterns keep their size
+  const material = finish ? finishMaterial(finish, onAsync, { side: THREE.DoubleSide }) : new THREE.MeshStandardMaterial({ color, roughness: 0.92, side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(geo, material);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;

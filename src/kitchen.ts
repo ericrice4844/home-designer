@@ -2,6 +2,7 @@ import { catalogEntry, createItem } from './catalog';
 import { add, convexParts, dist, itemOutline, itemsOverlap, openingsForWall, pointInPolygon, roomWalls, scale, type Wall } from './geometry';
 import { DOOR_STYLES, PULL_STYLES, styleOptions } from './itemStyles';
 import { IN, type Item, type Project, type Room, type Vec2 } from './model';
+import { finishFromPreset, presetById, presetsFor } from './materials';
 
 export type KitchenLayout = 'I' | 'L' | 'U' | 'galley' | 'I+island' | 'L+island' | 'U+island';
 
@@ -20,6 +21,8 @@ export interface KitchenOptions {
   /** Cabinet door style and hardware (see itemStyles DOOR_STYLES / PULL_STYLES). */
   door?: string;
   pull?: string;
+  /** Countertop material preset id (marble, quartz, butcher block…); '' = solid countertopColor. */
+  countertopMaterial?: string;
   /** Which appliance arrangement to use (the safe generator picks the best). */
   variant?: number;
 }
@@ -29,14 +32,27 @@ export const DEFAULT_KITCHEN_OPTIONS: KitchenOptions = {
   wallIndex: 0,
   wallCabinets: true,
   cabinetColor: '#f3f1ec',
-  countertopColor: '#f2f0eb',
+  countertopColor: '#f1f0ec',
   applianceColor: '#c9ccd1',
   handleColor: '#888888',
   islandColor: '#33475b',
   replace: true,
   door: 'shaker',
   pull: 'bar',
+  countertopMaterial: 'quartz-white',
 };
+
+/** Give a cabinet the kitchen's countertop: a real material, or a solid color. */
+export function applyCountertop(it: Item, opts: Pick<KitchenOptions, 'countertopColor' | 'countertopMaterial'>) {
+  const p = opts.countertopMaterial ? presetById(opts.countertopMaterial) : undefined;
+  if (p) {
+    it.counterFinish = finishFromPreset(p);
+    it.countertopColor = p.finish.color;
+  } else {
+    delete it.counterFinish;
+    it.countertopColor = opts.countertopColor;
+  }
+}
 
 /** Door style & hardware for a generated cabinet (only keys that kind supports, only if not the default). */
 export function cabinetStyleFor(kind: string, opts: Pick<KitchenOptions, 'door' | 'pull'>): Record<string, string> | undefined {
@@ -55,6 +71,7 @@ export function kitchenOptionsFrom(project: Project): KitchenOptions {
   if (!(o.layout in LAYOUT_LABELS)) o.layout = DEFAULT_KITCHEN_OPTIONS.layout;
   if (!DOOR_STYLES.some(([v]) => v === o.door)) o.door = DEFAULT_KITCHEN_OPTIONS.door;
   if (!PULL_STYLES.some(([v]) => v === o.pull)) o.pull = DEFAULT_KITCHEN_OPTIONS.pull;
+  if (o.countertopMaterial && !presetsFor('counter').some((q) => q.id === o.countertopMaterial)) o.countertopMaterial = DEFAULT_KITCHEN_OPTIONS.countertopMaterial;
   return o;
 }
 
@@ -363,7 +380,7 @@ function makeAt(kind: string, widthIn: number, wall: Wall, room: Room, u: number
     if (style) it.style = style;
   }
   if (it.category === 'appliance') it.color = opts.applianceColor;
-  if (it.countertop) it.countertopColor = opts.countertopColor;
+  if (it.countertop) applyCountertop(it, opts);
   if (kind === 'corner-base') {
     // corner piece: its L opens toward the run's start (towards -x local)
     it.depth = 36 * IN;
@@ -437,7 +454,7 @@ function placeIsland(room: Room, w0: Wall, _opp: Wall, items: Item[], opts: Kitc
   const isl = createItem(entry, 0, 0);
   isl.color = opts.islandColor;
   isl.accent = opts.handleColor;
-  isl.countertopColor = opts.countertopColor;
+  applyCountertop(isl, opts);
   // depth of what actually stands on the main wall (a 30" fridge is deeper than a 24" counter)
   const faceRot = Math.atan2(-w0.inward.x, w0.inward.z);
   const onWall = items.filter((i) => isFloorUnit(i) && Math.abs(Math.sin((i.rotation - faceRot) / 2)) < 0.01);

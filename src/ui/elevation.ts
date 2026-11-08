@@ -1,5 +1,6 @@
 // Wall view: the list of things on the selected wall, a dimensioned elevation drawing, and "view in 3D".
 import { anchorToWall, canLift, duplicateOnWall, itemWall, moveOnWall, resizeOnWall, neighbourWall, overlapsOnWall, snapOnWall, wallElevation, wallLabel, wallsByDistance, type Elevation } from '../elevation';
+import { wallDisplayColor } from '../materials';
 import { roomWalls } from '../geometry';
 import type { Room } from '../model';
 import { store } from '../state';
@@ -91,7 +92,7 @@ export function elevationSvg(el: Elevation, maxWidth: number, selectedId?: strin
   };
   add('rect', { x: 0, y: 0, width, height, fill: '#ffffff' });
   // wall face with its ceiling profile
-  const wallColor = el.room.wallColors[el.wall.index] ?? el.room.wallColor;
+  const wallColor = wallDisplayColor(el.room, el.wall.index);
   const outline = [`${X(0)},${Y(0)}`, ...el.ceiling.map(([s, y]) => `${X(s)},${Y(y)}`), `${X(el.length)},${Y(0)}`].join(' ');
   add('polygon', { points: outline, fill: wallColor, stroke: '#333', 'stroke-width': 1.5 });
   add('line', { x1: X(0) - 10, y1: Y(0), x2: X(el.length) + 10, y2: Y(0), stroke: '#333', 'stroke-width': 3 });

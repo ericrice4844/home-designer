@@ -1,42 +1,18 @@
 import { catalogEntry, isCeilingMounted } from '../catalog';
 import { area, bounds, ceilingHeightAt, centroid, maxCeilingHeight, roomAt, roomWalls } from '../geometry';
-import { FT, IN, uid, type CeilingType, type FloorType, type Item, type ItemShape, type Opening, type OpeningType, type Project, type Room } from '../model';
+import { defaultFloor, FT, IN, uid, type CeilingType, type Finish, type Item, type ItemShape, type Opening, type OpeningType, type Project, type Room } from '../model';
 import { clampOpening, duplicateRoom, freeOpeningOffset, itemsInRoom, scaleRoom, setWallLength, splitWall } from '../edits';
 import { store } from '../state';
 import { elevationForItem, elevationForRoom, wallViewSection } from './elevation';
-import { styleSection } from './stylePanel';
-import { floorPreview } from '../three/textures';
+import { applyCabinetFinishes, styleSection } from './stylePanel';
+import { finishEditor } from './finishPicker';
+import { shadesOf } from '../materials';
 import { formatArea, formatLength } from '../units';
 import { button, checkbox, colorInput, field, h, lengthInput, numberInput, row, section, select, slider, toast, fieldGroup } from './dom';
-import { addToLibrary, footprintEditor, FOOTPRINTS, importPatternImage } from './importers';
+import { addToLibrary, footprintEditor, FOOTPRINTS } from './importers';
 
 export const WALL_SWATCHES = ['#ffffff', '#f1ede4', '#ece6dc', '#e3e7e1', '#dfe5ec', '#d6cfc4', '#c9b9a3', '#a7b8a8', '#8fa3b8', '#5d7285', '#3f4a59', '#7a4e3a', '#b85c4b', '#e8c872'];
 const CABINET_SWATCHES = ['#ffffff', '#f3f1ec', '#d8d3c8', '#9aa3a8', '#6f7f6b', '#33475b', '#2b2b2b', '#8b5e3c', '#c19a6b'];
-const FLOOR_TYPES: [FloorType, string][] = [
-  ['hardwood', 'Hardwood'],
-  ['laminate', 'Laminate'],
-  ['vinyl', 'Vinyl plank'],
-  ['herringbone', 'Herringbone'],
-  ['tile', 'Tile'],
-  ['stone', 'Stone'],
-  ['checker', 'Checkerboard'],
-  ['carpet', 'Carpet'],
-  ['concrete', 'Concrete'],
-  ['custom', 'Imported pattern'],
-];
-const FLOOR_PRESETS: Record<FloorType, { color: string; accent: string; scale: number }> = {
-  hardwood: { color: '#b07a4a', accent: '#8a5a32', scale: 5 * IN },
-  laminate: { color: '#c49a6c', accent: '#9a7650', scale: 7 * IN },
-  vinyl: { color: '#a9a39a', accent: '#7f786e', scale: 7 * IN },
-  herringbone: { color: '#b48a5e', accent: '#7f5c3a', scale: 4 * IN },
-  tile: { color: '#e6e1d8', accent: '#b9b2a5', scale: 12 * IN },
-  stone: { color: '#d6d0c4', accent: '#a69f92', scale: 24 * IN },
-  checker: { color: '#f4f4f4', accent: '#2d2d2d', scale: 12 * IN },
-  carpet: { color: '#c9c0b3', accent: '#a69c8e', scale: 0.2 },
-  concrete: { color: '#a6a6a2', accent: '#8c8c88', scale: 0.4 },
-  custom: { color: '#cccccc', accent: '#999999', scale: 1 },
-};
-
 const fmt = (m: number) => formatLength(m, store.project.settings.units);
 
 function updRoom(id: string, fn: (r: Room, p: Project) => void) {
@@ -45,6 +21,8 @@ function updRoom(id: string, fn: (r: Room, p: Project) => void) {
     if (r) fn(r, p);
   });
 }
+const roomIn = (p: Project, id: string) => p.rooms.find((q) => q.id === id);
+
 function liveRoom(id: string, fn: (r: Room) => void) {
   const r = store.project.rooms.find((q) => q.id === id);
   if (r) fn(r);
@@ -86,7 +64,19 @@ export function roomPanel(room: Room, wallIndex?: number): HTMLElement {
         }), { min: 1 })),
         field('Thickness', lengthInput(room.wallThickness, (v) => updRoom(room.id, (r) => (r.wallThickness = v)), { min: 0.03, max: 0.6 })),
       ),
-      field('Wall color', colorInput(room.wallColor, (c) => liveRoom(room.id, (r) => (r.wallColor = c)), WALL_SWATCHES)),
+      fieldGroup('Wall finish', finishEditor({
+        id: `walls:${room.id}`,
+        surface: 'wall',
+        get: (p) => roomIn(p, room.id)?.wallFinish,
+        put: (p, f) => {
+          const r = roomIn(p, room.id);
+          if (!r) return;
+          if (f) r.wallFinish = f;
+          else delete r.wallFinish;
+        },
+        plain: { label: 'Paint', editor: () => field('Wall color', colorInput(room.wallColor, (c) => liveRoom(room.id, (r) => (r.wallColor = c)), [...WALL_SWATCHES, ...shadesOf(room.wallColor).filter((c) => !WALL_SWATCHES.includes(c))])) },
+        allowImport: true,
+      })),
       row(
         checkbox(room.baseboard, 'Baseboards', (v) => updRoom(room.id, (r) => (r.baseboard = v))),
         room.baseboard ? colorInput(room.baseboardColor, (c) => liveRoom(room.id, (r) => (r.baseboardColor = c))) : null,
@@ -120,50 +110,36 @@ export function roomPanel(room: Room, wallIndex?: number): HTMLElement {
       );
     if (c.type === 'tray') ceilingBody.append(field('Tray inset from walls', lengthInput(c.trayInset, (v) => updRoom(room.id, (r) => (r.ceiling.trayInset = v)), { min: 0.1 })));
   }
-  ceilingBody.append(field('Ceiling color', colorInput(room.ceilingColor, (col) => liveRoom(room.id, (r) => (r.ceilingColor = col)), ['#ffffff', '#fbfaf7', '#f1ede4', '#dfe5ec', '#c9b9a3', '#8b5e3c', '#3f4a59'])));
+  ceilingBody.append(fieldGroup('Ceiling finish', finishEditor({
+    id: `ceiling:${room.id}`,
+    surface: 'ceiling',
+    get: (p) => roomIn(p, room.id)?.ceilingFinish,
+    put: (p, f) => {
+      const r = roomIn(p, room.id);
+      if (!r) return;
+      if (f) r.ceilingFinish = f;
+      else delete r.ceilingFinish;
+    },
+    plain: { label: 'Paint', editor: () => field('Ceiling color', colorInput(room.ceilingColor, (col) => liveRoom(room.id, (r) => (r.ceilingColor = col)), ['#ffffff', '#fbfaf7', '#f1ede4', '#dfe5ec', '#c9b9a3', '#8b5e3c', '#3f4a59', ...shadesOf(room.ceilingColor)])) },
+    allowImport: true,
+  })));
   root.append(section('Ceiling', ceilingBody));
 
   // Floor
-  const f = room.floor;
-  const tiles = h(
-    'div',
-    { class: 'floor-grid' },
-    ...FLOOR_TYPES.filter(([t]) => t !== 'custom' || f.imageAsset).map(([t, label]) => {
-      const preset = t === f.type ? f : { ...FLOOR_PRESETS[t], type: t, rotation: 0 };
-      return h(
-        'button',
-        {
-          class: `floor-tile ${t === f.type ? 'active' : ''}`,
-          title: label,
-          onclick: () => updRoom(room.id, (r) => {
-            if (r.floor.type === t) return;
-            r.floor = { ...r.floor, type: t, ...(t === 'custom' ? {} : FLOOR_PRESETS[t]) };
-          }),
-        },
-        h('img', { src: floorPreview({ ...preset, type: t } as any), alt: '' }),
-        h('span', {}, label),
-      );
-    }),
-  );
   root.append(
     section(
       'Flooring',
-      tiles,
-      h('div', { class: 'grid2' },
-        field('Color', colorInput(f.color, (col) => liveRoom(room.id, (r) => (r.floor.color = col)))),
-        field(f.type === 'tile' || f.type === 'stone' ? 'Grout' : f.type === 'checker' ? 'Second color' : 'Accent', colorInput(f.accent, (col) => liveRoom(room.id, (r) => (r.floor.accent = col)))),
-      ),
-      h('div', { class: 'grid2' },
-        field(f.type.match(/tile|stone|checker/) ? 'Tile size' : f.type === 'custom' ? 'Pattern repeat' : 'Plank width', lengthInput(f.scale, (v) => updRoom(room.id, (r) => (r.floor.scale = v)), { min: 0.02, max: 5 })),
-        field('Rotation', slider(Math.round((f.rotation * 180) / Math.PI), 0, 180, 15, (v) => liveRoom(room.id, (r) => (r.floor.rotation = (v * Math.PI) / 180)), (v) => `${v}°`)),
-      ),
-      row(
-        button('🖼️ Import pattern / photo', async () => {
-          const id = await importPatternImage();
-          if (id) updRoom(room.id, (r) => (r.floor = { ...r.floor, type: 'custom', imageAsset: id, scale: r.floor.type === 'custom' ? r.floor.scale : 1 }));
-        }),
-        button('Apply to all rooms', () => store.update((p) => p.rooms.forEach((r) => (r.floor = { ...room.floor })))),
-      ),
+      finishEditor({
+        id: `floor:${room.id}`,
+        surface: 'floor',
+        get: (p) => roomIn(p, room.id)?.floor,
+        put: (p, f) => {
+          const r = roomIn(p, room.id);
+          if (r) r.floor = f ?? defaultFloor();
+        },
+        allowImport: true,
+      }),
+      row(button('Apply to all rooms', () => store.update((p) => p.rooms.forEach((r) => (r.floor = { ...room.floor }))))),
     ),
   );
 
@@ -234,6 +210,22 @@ function wallRow(room: Room, index: number, length: number, active: boolean) {
         button('+ Slider', () => addOpening(room, index, 'sliding-door'), 'small'),
         button('Split wall', () => store.update((p) => splitWall(p, room.id, index)), 'small'),
       ),
+      fieldGroup(`Wall ${index + 1} finish`, finishEditor({
+        id: `wall:${room.id}:${index}`,
+        surface: 'wall',
+        get: (p) => roomIn(p, room.id)?.wallFinishes?.[index],
+        put: (p, f) => {
+          const r = roomIn(p, room.id);
+          if (!r) return;
+          const per = { ...(r.wallFinishes ?? {}) };
+          if (f) per[index] = f;
+          else delete per[index];
+          if (Object.keys(per).length) r.wallFinishes = per;
+          else delete r.wallFinishes;
+        },
+        plain: { label: 'Like the room', editor: () => h('p', { class: 'hint' }, room.wallColors[index] ? 'Painted its own color (the swatch in the row above).' : 'Uses the room’s wall finish. Pick a material to make this an accent wall.') },
+        allowImport: true,
+      })),
     );
   }
   return el;
@@ -359,11 +351,34 @@ export function itemPanel(it: Item): HTMLElement {
   );
 
   const swatches = it.category === 'kitchen' ? CABINET_SWATCHES : it.category === 'appliance' ? ['#c9ccd1', '#2b2b2b', '#f4f4f4', '#3b3f45', '#b08d57'] : ['#6f7d8c', '#a26b4f', '#8b5e3c', '#e8e4dc', '#3d3a36', '#2e4a3f', '#b85c4b', '#e0b25a', '#ffffff', '#222222'];
+  const itemIn = (p: Project) => p.items.find((x) => x.id === it.id);
+  // a material replaces a color: keep the color in step so the parts are still found and the plan shows it
+  const finishFor = (key: 'finish' | 'accentFinish' | 'counterFinish', color: 'color' | 'accent' | 'countertopColor', label: string, plainEditor: () => HTMLElement, surface: 'item' | 'counter' = 'item') =>
+    fieldGroup(label, finishEditor({
+      id: `item:${it.id}:${key}`,
+      surface,
+      get: (p) => itemIn(p)?.[key],
+      put: (p: Project, f: Finish | undefined) => {
+        const q = itemIn(p);
+        if (!q) return;
+        if (f) {
+          q[key] = f;
+          q[color] = f.color;
+        } else delete q[key];
+      },
+      plain: { label: 'Color', editor: plainEditor },
+      allowImport: surface === 'item',
+    }));
   const look = section(
     'Look',
-    field('Main color', colorInput(it.color, (c) => live((q) => (q.color = c)), swatches)),
-    field(it.category === 'kitchen' ? 'Handles' : 'Accent', colorInput(it.accent, (c) => live((q) => (q.accent = c)), ['#888888', '#2b2b2b', '#c8a45a', '#b87333', '#e0e0e0'])),
+    finishFor('finish', 'color', it.category === 'kitchen' ? 'Cabinet finish' : 'Main finish', () => field('Main color', colorInput(it.color, (c) => live((q) => (q.color = c)), [...swatches, ...shadesOf(it.color, it.accent).filter((c) => !swatches.includes(c))]))),
+    finishFor('accentFinish', 'accent', it.category === 'kitchen' ? 'Handles' : 'Accent (legs, frame, trim…)', () => field(it.category === 'kitchen' ? 'Handles' : 'Accent', colorInput(it.accent, (c) => live((q) => (q.accent = c)), ['#888888', '#2b2b2b', '#c8a45a', '#b87333', '#e0e0e0', ...shadesOf(it.accent, it.color)]))),
   );
+  if (it.category === 'kitchen' && (it.finish || it.counterFinish))
+    look.append(row(button('Use these materials on all cabinets in the room', () => {
+      const n = applyCabinetFinishes(it);
+      toast(n ? `Applied to ${n} other cabinet${n > 1 ? 's' : ''}` : 'No other cabinets in this room');
+    }, 'small')));
   if (it.countertop !== undefined || it.category === 'kitchen' || it.kind === 'vanity') {
     look.append(
       checkbox(!!it.countertop, 'Countertop', (v) => upd((q) => {
@@ -371,8 +386,10 @@ export function itemPanel(it: Item): HTMLElement {
         q.countertopColor ??= '#e9e6e1';
       })),
     );
-    if (it.countertop || it.kind === 'island')
-      look.append(field('Countertop', colorInput(it.countertopColor ?? '#e9e6e1', (c) => live((q) => (q.countertopColor = c)), ['#f2f0eb', '#e9e6e1', '#d9d4cc', '#9b9b98', '#2a2a2a', '#c49a6c', '#7a7f85'])));
+    if (it.countertop || it.kind === 'island') {
+      const ctColor = it.countertopColor ?? '#e9e6e1';
+      look.append(finishFor('counterFinish', 'countertopColor', 'Countertop', () => field('Countertop color', colorInput(ctColor, (c) => live((q) => (q.countertopColor = c)), ['#f2f0eb', '#e9e6e1', '#d9d4cc', '#9b9b98', '#2a2a2a', '#c49a6c', '#7a7f85', ...shadesOf(ctColor)])), 'counter'));
+    }
   }
   if (it.shape !== 'model' && it.shape !== 'gltf') {
     look.append(

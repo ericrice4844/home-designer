@@ -68,6 +68,15 @@ export function splitWall(p: Project, roomId: string, index: number) {
     if (i === index) colors[index + 1] = v;
   }
   r.wallColors = colors;
+  if (r.wallFinishes) {
+    const fins: NonNullable<typeof r.wallFinishes> = {};
+    for (const [k, v] of Object.entries(r.wallFinishes)) {
+      const i = Number(k);
+      fins[i > index ? i + 1 : i] = v;
+      if (i === index) fins[index + 1] = { ...v };
+    }
+    r.wallFinishes = fins;
+  }
   r.hiddenWalls = r.hiddenWalls.flatMap((i) => (i > index ? [i + 1] : i === index ? [i, i + 1] : [i]));
   const half = L / 2;
   for (const o of p.openings) {

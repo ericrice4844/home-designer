@@ -63,3 +63,35 @@ describe('the Kitchen tab works on the kitchen', () => {
     expect(kitchenRoom()!.name).toBe('Office');
   });
 });
+
+describe('cabinet materials apply to the whole room', () => {
+  it('copies body, handle and countertop materials to the other cabinets in the room only', async () => {
+    const { applyCabinetFinishes } = await import('../src/ui/stylePanel');
+    const { finishFromPreset, presetById } = await import('../src/materials');
+    const { store } = await import('../src/state');
+    const { sampleHouse } = await import('../src/templates');
+    store.load(sampleHouse());
+    const cabs = store.project.items.filter((i) => i.category === 'kitchen');
+    const src = cabs.find((i) => i.kind === 'base-cabinet')!;
+    const walnut = finishFromPreset(presetById('walnut')!);
+    const nero = finishFromPreset(presetById('nero')!);
+    store.update((p) => {
+      const q = p.items.find((i) => i.id === src.id)!;
+      q.finish = walnut;
+      q.color = walnut.color;
+      q.counterFinish = nero;
+    });
+    const n = applyCabinetFinishes(store.item(src.id)!);
+    expect(n).toBeGreaterThan(3);
+    const others = store.project.items.filter((i) => i.category === 'kitchen' && i.id !== src.id);
+    for (const q of others) {
+      expect(q.finish?.preset).toBe('walnut');
+      expect(q.color).toBe(walnut.color);
+      if (q.countertop) expect(q.counterFinish?.preset).toBe('nero');
+    }
+    // non-kitchen items untouched
+    expect(store.project.items.filter((i) => i.category !== 'kitchen').some((i) => i.finish)).toBe(false);
+    store.undo();
+    expect(store.project.items.filter((i) => i.id !== src.id).some((i) => i.finish)).toBe(false);
+  });
+});

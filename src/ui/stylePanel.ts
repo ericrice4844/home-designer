@@ -81,3 +81,31 @@ export function applyCabinetStyle(src: Item): number {
   });
   return n;
 }
+
+/**
+ * Copy a cabinet's materials (body, handles, countertop) to the other cabinets in its room.
+ * Returns how many were changed.
+ */
+export function applyCabinetFinishes(src: Item): number {
+  const room = store.project.rooms.find((r) => pointInPolygon({ x: src.x, z: src.z }, r.points));
+  let n = 0;
+  store.update((p) => {
+    for (const q of p.items) {
+      if (q.id === src.id || q.category !== 'kitchen') continue;
+      if (room && !pointInPolygon({ x: q.x, z: q.z }, room.points)) continue;
+      for (const [k, c] of [['finish', 'color'], ['accentFinish', 'accent']] as const) {
+        const f = src[k];
+        if (f) {
+          q[k] = { ...f };
+          q[c] = f.color;
+        }
+      }
+      if (src.counterFinish && (q.countertop || q.kind === 'island')) {
+        q.counterFinish = { ...src.counterFinish };
+        q.countertopColor = src.counterFinish.color;
+      }
+      n++;
+    }
+  });
+  return n;
+}

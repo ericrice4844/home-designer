@@ -17,17 +17,16 @@ export interface Ceiling {
   trayInset: number;
 }
 
-export type FloorType =
-  | 'hardwood'
-  | 'laminate'
-  | 'tile'
-  | 'stone'
-  | 'carpet'
-  | 'vinyl'
-  | 'concrete'
-  | 'herringbone'
-  | 'checker'
-  | 'custom';
+/** Every surface pattern (floors, walls, ceilings, cabinets, countertops, furniture). */
+export const FINISH_TYPES = [
+  // wood
+  'hardwood', 'wide-plank', 'laminate', 'vinyl', 'herringbone', 'chevron', 'parquet',
+  // tile
+  'tile', 'subway', 'hex', 'mosaic', 'penny', 'checker', 'brick',
+  // stone & other
+  'stone', 'marble', 'granite', 'terrazzo', 'flagstone', 'concrete', 'carpet', 'custom',
+] as const;
+export type FloorType = (typeof FINISH_TYPES)[number];
 
 export interface Floor {
   type: FloorType;
@@ -40,7 +39,14 @@ export interface Floor {
   rotation: number;
   /** Asset id of a user-imported pattern image (used when type === 'custom'). */
   imageAsset?: string;
+  /** false = no accent detail (grain, seams, grout, veins, chips are drawn in shades of the main color). */
+  accents?: boolean;
+  /** Name of the material preset it came from (shown in the UI; cleared once colors are changed). */
+  preset?: string;
 }
+
+/** A surface material: same data as a floor (pattern, colors, size, rotation). */
+export type Finish = Floor;
 
 export interface Room {
   id: string;
@@ -54,10 +60,16 @@ export interface Room {
   wallColor: string;
   /** Optional per-wall color overrides keyed by wall index (accent walls). */
   wallColors: Record<number, string>;
+  /** Material for every wall of the room (paneling, tile, brick…); replaces wallColor. */
+  wallFinish?: Finish;
+  /** Per-wall material overrides keyed by wall index (accent walls). */
+  wallFinishes?: Record<number, Finish>;
   /** Walls that should not be built (open-plan edges shared with another room). */
   hiddenWalls: number[];
   ceiling: Ceiling;
   ceilingColor: string;
+  /** Material for the ceiling (wood planks, tile…); replaces ceilingColor. */
+  ceilingFinish?: Finish;
   floor: Floor;
   baseboard: boolean;
   baseboardColor: string;
@@ -134,6 +146,10 @@ export interface Item {
   countertopColor?: string;
   /** Prevent accidental dragging. */
   locked?: boolean;
+  /** Materials replacing the main color, the accent color and the countertop color (wood, stone…). */
+  finish?: Finish;
+  accentFinish?: Finish;
+  counterFinish?: Finish;
   /** Style & shape choices (door style, pulls, appliance type, arm shape…) – see itemStyles.ts */
   style?: Record<string, string | number>;
 }
@@ -325,9 +341,20 @@ export function normalizeProject(raw: unknown): Project {
       wallColors: Object.fromEntries(Object.entries(isObj(r.wallColors) ? r.wallColors : {}).filter(([k, v]) => /^\d+$/.test(k) && isColor(v))) as Record<number, string>,
       hiddenWalls: Array.isArray(r.hiddenWalls) ? r.hiddenWalls.filter((n: unknown) => Number.isInteger(n) && (n as number) >= 0 && (n as number) < r.points.length) : [],
       ceiling: { ...d.ceiling, ...(isObj(r.ceiling) ? pickValid(r.ceiling, d.ceiling) : {}) },
-      floor: { ...d.floor, ...(isObj(r.floor) ? pickValid(r.floor, d.floor) : {}) },
+      floor: normalizeFinish(r.floor) ?? d.floor,
     };
-    if (isObj(r.floor) && typeof r.floor.imageAsset === 'string') room.floor.imageAsset = r.floor.imageAsset;
+    const wf = normalizeFinish(r.wallFinish);
+    if (wf) room.wallFinish = wf;
+    const cf = normalizeFinish(r.ceilingFinish);
+    if (cf) room.ceilingFinish = cf;
+    if (isObj(r.wallFinishes)) {
+      const per: Record<number, Finish> = {};
+      for (const [k, v] of Object.entries(r.wallFinishes)) {
+        const f = /^\d+$/.test(k) && Number(k) < r.points.length ? normalizeFinish(v) : undefined;
+        if (f) per[Number(k)] = f;
+      }
+      if (Object.keys(per).length) room.wallFinishes = per;
+    }
     roomIds.add(room.id);
     wallCounts.set(room.id, room.points.length);
     p.rooms.push(room);
@@ -383,6 +410,10 @@ export function normalizeProject(raw: unknown): Project {
     if (typeof it.countertop === 'boolean') item.countertop = it.countertop;
     if (isColor(it.countertopColor)) item.countertopColor = it.countertopColor;
     if (typeof it.locked === 'boolean') item.locked = it.locked;
+    for (const k of ['finish', 'accentFinish', 'counterFinish'] as const) {
+      const f = normalizeFinish(it[k]);
+      if (f) item[k] = f;
+    }
     const style = sanitizeStyle(item.kind, it.style);
     if (style) item.style = style;
     if (isObj(it.light)) {
@@ -427,6 +458,28 @@ export function normalizeProject(raw: unknown): Project {
     // a damaged tracing image is not worth losing the design over: it is simply dropped
   }
   return p;
+}
+
+/**
+ * A valid surface material from untrusted data, or undefined. Unknown patterns, bad colors and
+ * out-of-range sizes are rejected or clamped so a damaged file can't break the renderer.
+ */
+export function normalizeFinish(raw: unknown): Finish | undefined {
+  if (!isObj(raw) || !(FINISH_TYPES as readonly string[]).includes(raw.type as string)) return undefined;
+  const d = defaultFloor();
+  const f: Finish = {
+    type: raw.type as FloorType,
+    color: isColor(raw.color) ? raw.color : d.color,
+    accent: isColor(raw.accent) ? raw.accent : d.accent,
+    scale: isNum(raw.scale) ? Math.max(0.005, Math.min(10, raw.scale)) : d.scale,
+    rotation: isNum(raw.rotation) ? raw.rotation : 0,
+  };
+  if (typeof raw.imageAsset === 'string' && raw.imageAsset) f.imageAsset = raw.imageAsset;
+  if (raw.accents === false) f.accents = false;
+  if (typeof raw.preset === 'string' && raw.preset.length <= 60) f.preset = raw.preset;
+  // an imported pattern without its image falls back to plain planks in the same colors
+  if (f.type === 'custom' && !f.imageAsset) f.type = 'hardwood';
+  return f;
 }
 
 /** Copy keys from src whose type matches the default (finite numbers only). */

@@ -8,12 +8,15 @@ import { App } from './ui/app';
 import { hideBanner, showBanner } from './ui/banner';
 import { download } from './ui/dom';
 import { describeError } from './ui/errors';
+import { drawFinish, finishPreview } from './three/textures';
+import { finishFromPreset, MATERIAL_PRESETS } from './materials';
 
 async function start() {
   const result = await store.restore();
   if (result.status === 'empty') store.load(sampleHouse());
   const app = new App(document.getElementById('app')!);
-  (window as any).hds = { store, app };
+  // handles for the browser tests (and the curious)
+  (window as any).hds = { store, app, materials: { drawFinish, finishPreview, finishFromPreset, MATERIAL_PRESETS } };
   // the welcome help shows once per browser, not every time a project starts empty
   if (result.status === 'empty' && !helpSeen()) {
     setTimeout(() => app.helpModal(), 600);

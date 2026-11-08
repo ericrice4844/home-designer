@@ -1,9 +1,11 @@
 import { CATALOG } from '../catalog';
 import { pointInPolygon, roomWalls } from '../geometry';
 import { DOOR_STYLES, PULL_STYLES } from '../itemStyles';
-import { analyzeKitchen, cabinetStyleFor, generateKitchenSafe, isReplaceableKitchenItem, kitchenOptionsFrom, LAYOUT_LABELS, type KitchenLayout, type KitchenOptions } from '../kitchen';
+import { analyzeKitchen, applyCountertop, cabinetStyleFor, generateKitchenSafe, isReplaceableKitchenItem, kitchenOptionsFrom, LAYOUT_LABELS, type KitchenLayout, type KitchenOptions } from '../kitchen';
 import type { Room } from '../model';
+import { finishFromPreset, presetsFor } from '../materials';
 import { store } from '../state';
+import { finishPreview } from '../three/textures';
 import { formatLength } from '../units';
 import { button, checkbox, field, fieldGroup, h, row, section, select, toast } from './dom';
 
@@ -19,12 +21,10 @@ const CABINET_STYLES: [string, string][] = [
   ['#c19a6b', 'White oak'],
 ];
 const COUNTERS: [string, string][] = [
-  ['#f2f0eb', 'White quartz'],
-  ['#e9e6e1', 'Carrara marble'],
-  ['#d9d4cc', 'Cream granite'],
-  ['#7a7f85', 'Concrete'],
-  ['#2a2a2a', 'Black granite'],
-  ['#c49a6c', 'Butcher block'],
+  ['#f2f0eb', 'Solid white'],
+  ['#d9d4cc', 'Solid cream'],
+  ['#7a7f85', 'Solid gray'],
+  ['#2a2a2a', 'Solid black'],
 ];
 const FINISHES: [string, string][] = [
   ['#c9ccd1', 'Stainless'],
@@ -73,7 +73,17 @@ export function kitchenPanel(onPlace: (kind: string) => void): HTMLElement {
       }), 'Tip: tap a wall in the plan to choose it'),
       layoutDiagram(opts.layout),
       fieldGroup('Cabinets', swatchRow(CABINET_STYLES, opts.cabinetColor, (c) => (opts.cabinetColor = c))),
-      fieldGroup('Countertop', swatchRow(COUNTERS, opts.countertopColor, (c) => (opts.countertopColor = c))),
+      fieldGroup('Countertop', h('div', {},
+        h('div', { class: 'material-row' }, ...presetsFor('counter').map((m) => h('button', {
+          type: 'button',
+          class: `material-chip ${opts.countertopMaterial === m.id ? 'active' : ''}`,
+          title: m.name,
+          'aria-label': m.name,
+          'aria-pressed': String(opts.countertopMaterial === m.id),
+          onclick: () => ((opts.countertopMaterial = m.id), (opts.countertopColor = m.finish.color), rerender()),
+        }, h('img', { src: finishPreview(finishFromPreset(m), 48), alt: '' })))),
+        swatchRow(COUNTERS, opts.countertopMaterial ? '' : opts.countertopColor, (c) => ((opts.countertopColor = c), (opts.countertopMaterial = ''))),
+      )),
       fieldGroup('Appliances', swatchRow(FINISHES, opts.applianceColor, (c) => (opts.applianceColor = c))),
       fieldGroup('Hardware finish', swatchRow(HANDLES, opts.handleColor, (c) => (opts.handleColor = c))),
       fieldGroup('Door style', h('div', { class: 'chips' }, ...DOOR_STYLES.map(([v, l]) => button(l, () => ((opts.door = v), rerender()), `chip ${opts.door === v ? 'active' : ''}`)))),
@@ -152,6 +162,9 @@ function applyFinishes(room: Room, opts: KitchenOptions) {
       if (it.category === 'kitchen') {
         it.color = it.kind === 'island' ? opts.islandColor : opts.cabinetColor;
         it.accent = opts.handleColor;
+        // the kitchen's colors replace any wood / material picked on single cabinets
+        delete it.finish;
+        delete it.accentFinish;
         const st = cabinetStyleFor(it.kind, opts);
         if (st) it.style = { ...(it.style ?? {}), ...st };
       }
@@ -160,7 +173,7 @@ function applyFinishes(room: Room, opts: KitchenOptions) {
         it.color = opts.cabinetColor;
         it.accent = opts.applianceColor;
       }
-      if (it.countertop || it.kind === 'island') it.countertopColor = opts.countertopColor;
+      if (it.countertop || it.kind === 'island') applyCountertop(it, opts);
     }
   });
 }
