@@ -31,6 +31,13 @@ export function field(label: string, control: HTMLElement, hint?: string) {
   return h('label', { class: 'field' }, h('span', { class: 'field-label' }, label), control, hint ? h('span', { class: 'field-hint' }, hint) : null);
 }
 
+/** Like field(), for a group of buttons/chips: a <label> would hand its text to the first button. */
+export function fieldGroup(label: string, control: HTMLElement) {
+  control.setAttribute('aria-label', control.getAttribute('aria-label') ?? label);
+  if (!control.getAttribute('role')) control.setAttribute('role', 'group');
+  return h('div', { class: 'field' }, h('span', { class: 'field-label' }, label), control);
+}
+
 export function row(...children: Child[]) {
   return h('div', { class: 'row' }, ...children);
 }

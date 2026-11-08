@@ -3,10 +3,10 @@ import { expect, test, type Page } from '@playwright/test';
 const counts = (page: Page) => page.evaluate(() => ({ rooms: (window as any).hds.store.project.rooms.length, items: (window as any).hds.store.project.items.length }));
 
 async function open(page: Page) {
+  // skip the one-time welcome dialog so it can't pop up in the middle of a test
+  await page.addInitScript(() => localStorage.setItem('hds-help-seen', '1'));
   await page.goto('/');
   await page.waitForFunction(() => (window as any).hds?.store);
-  // first visits show the help dialog after a short delay
-  await page.locator('.modal-head .btn').click({ timeout: 8000 }).catch(() => {});
   await expect(page.locator('.modal-overlay')).toHaveCount(0);
 }
 

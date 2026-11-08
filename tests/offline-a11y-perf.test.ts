@@ -138,6 +138,19 @@ describe('6.3 accessibility', () => {
     expect(unnamed).toEqual([]);
   });
 
+  it('no <label> lends its text to a button (chip rows use role=group instead)', () => {
+    store.load(sampleHouse());
+    const items = ['sofa', 'base-cabinet', 'refrigerator', 'pendant'].map((k) => store.project.items.find((i) => i.kind === k)!).filter(Boolean);
+    const panels = [settingsPanel(() => {}), kitchenPanel(() => {}), ...items.map((i) => itemPanel(i))];
+    const bad: string[] = [];
+    for (const panel of panels)
+      for (const label of panel.querySelectorAll('label')) {
+        const first = label.querySelector('button, input, select, textarea');
+        if (first?.tagName === 'BUTTON') bad.push(label.textContent!.slice(0, 60));
+      }
+    expect(bad).toEqual([]);
+  });
+
   it('styles include a visible focus ring and reduced-motion support', () => {
     const css = readFileSync('src/styles.css', 'utf8');
     expect(css).toMatch(/:focus-visible\s*{[^}]*outline:\s*2px/);

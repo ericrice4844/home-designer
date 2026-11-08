@@ -14,7 +14,15 @@ async function start() {
   if (result.status === 'empty') store.load(sampleHouse());
   const app = new App(document.getElementById('app')!);
   (window as any).hds = { store, app };
-  if (result.status === 'empty') setTimeout(() => app.helpModal(), 600);
+  // the welcome help shows once per browser, not every time a project starts empty
+  if (result.status === 'empty' && !helpSeen()) {
+    setTimeout(() => app.helpModal(), 600);
+    try {
+      localStorage.setItem('hds-help-seen', '1');
+    } catch {
+      /* private mode: show it again next time */
+    }
+  }
   if (result.status === 'corrupt') showRestoreFailure(result.raw, result.error);
 
   // Save problems are always visible
@@ -94,6 +102,14 @@ function showRestoreFailure(raw: unknown, error: unknown) {
       },
     },
   ]);
+}
+
+function helpSeen(): boolean {
+  try {
+    return localStorage.getItem('hds-help-seen') === '1';
+  } catch {
+    return false;
+  }
 }
 
 function safeStringify(v: unknown): string {

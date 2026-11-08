@@ -1,9 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 
 async function open(page: Page) {
+  // skip the one-time welcome dialog so it can't pop up in the middle of a test
+  await page.addInitScript(() => localStorage.setItem('hds-help-seen', '1'));
   await page.goto('/');
   await page.waitForFunction(() => (window as any).hds?.store);
-  await page.locator('.modal-head .btn').click({ timeout: 8000 }).catch(() => {});
   await expect(page.locator('.modal-overlay')).toHaveCount(0);
 }
 
@@ -198,4 +199,43 @@ test('pick any wall of a room from the elevation dropdown', async ({ page, isMob
   });
   await expect(select).toHaveValue('0');
   await expect(page.locator('.elevation-holder text', { hasText: /Bathtub/ }).first()).toBeVisible();
+});
+
+test('style a sofa and the kitchen cabinets, and place a person for scale', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'desktop only');
+  await open(page);
+  // sofa: pick rolled arms and a lower seat
+  const sofaId = await page.evaluate(() => {
+    const { store } = (window as any).hds;
+    const sofa = store.project.items.find((i: any) => i.kind === 'sofa');
+    store.select({ type: 'item', id: sofa.id });
+    return sofa.id;
+  });
+  const arms = page.getByRole('radiogroup', { name: 'Arms' });
+  await arms.getByRole('radio', { name: 'Rolled' }).click();
+  await expect(page.getByRole('radiogroup', { name: 'Arms' }).getByRole('radio', { name: 'Rolled' })).toHaveAttribute('aria-checked', 'true');
+  const seat = page.getByRole('slider', { name: 'Seat height' });
+  await seat.fill('16');
+  await seat.dispatchEvent('change');
+  const style = await page.evaluate((id) => (window as any).hds.store.item(id).style, sofaId);
+  expect(style).toMatchObject({ arms: 'rolled', seatHeight: 16 });
+
+  // kitchen: slab doors + edge pulls on every cabinet in the kitchen
+  await page.getByRole('tab', { name: 'Kitchen' }).click();
+  await page.getByRole('button', { name: 'Slab / flat' }).click();
+  await page.getByRole('button', { name: 'Edge / tab pull' }).click();
+  await page.getByRole('button', { name: 'Apply finishes to existing' }).click();
+  const styles = await page.evaluate(() => {
+    const { store } = (window as any).hds;
+    return store.project.items.filter((i: any) => i.category === 'kitchen' && ['base-cabinet', 'wall-cabinet', 'sink-base'].includes(i.kind)).map((i: any) => i.style);
+  });
+  expect(styles.length).toBeGreaterThan(5);
+  for (const s of styles) expect(s).toMatchObject({ door: 'slab', pull: 'edge' });
+
+  // people for scale
+  await page.getByRole('searchbox').fill('adult');
+  await page.locator('.cat-item', { hasText: 'Adult (5′10″)' }).click();
+  const person = await page.evaluate(() => (window as any).hds.store.selectedItem());
+  expect(person.category).toBe('people');
+  expect(person.height).toBeCloseTo(70 * 0.0254, 3);
 });

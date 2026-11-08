@@ -475,6 +475,9 @@ export class App {
         <li><b>Import 3D models</b> (.glb/.obj) from manufacturers for exact fixtures and appliances.</li>
         <li>Red dimension lines show the <b>space to walls and other items</b>; blue lines show height above floor / below ceiling.</li>
       </ul>
+      <h4>Styles, shapes & people</h4>
+      <ul><li>Select any cabinet, appliance or piece of furniture and use <b>Style & shape</b> in the Edit panel: door styles and hardware, fridge/range/hood types, sofa arms and seat height, table shapes, headboards and more. The Kitchen tab sets door style and hardware for a whole kitchen.</li>
+      <li>Add <b>People (for scale)</b> from the catalog – change their height to match your family.</li></ul>
       <h4>Kitchen</h4>
       <ul><li>The Kitchen tab generates single-wall, L, U, galley and island layouts with appliances, then checks the work triangle, landing areas, aisle widths and backsplash height.</li></ul>
       <h4>View</h4>

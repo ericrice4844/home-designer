@@ -1,5 +1,6 @@
 import { catalogEntry, createItem } from './catalog';
 import { add, convexParts, dist, itemOutline, itemsOverlap, openingsForWall, pointInPolygon, roomWalls, scale, type Wall } from './geometry';
+import { DOOR_STYLES, PULL_STYLES, styleOptions } from './itemStyles';
 import { IN, type Item, type Project, type Room, type Vec2 } from './model';
 
 export type KitchenLayout = 'I' | 'L' | 'U' | 'galley' | 'I+island' | 'L+island' | 'U+island';
@@ -16,6 +17,9 @@ export interface KitchenOptions {
   islandColor: string;
   /** Replace existing kitchen items in this room. */
   replace: boolean;
+  /** Cabinet door style and hardware (see itemStyles DOOR_STYLES / PULL_STYLES). */
+  door?: string;
+  pull?: string;
   /** Which appliance arrangement to use (the safe generator picks the best). */
   variant?: number;
 }
@@ -30,7 +34,18 @@ export const DEFAULT_KITCHEN_OPTIONS: KitchenOptions = {
   handleColor: '#888888',
   islandColor: '#33475b',
   replace: true,
+  door: 'shaker',
+  pull: 'bar',
 };
+
+/** Door style & hardware for a generated cabinet (only keys that kind supports, only if not the default). */
+export function cabinetStyleFor(kind: string, opts: Pick<KitchenOptions, 'door' | 'pull'>): Record<string, string> | undefined {
+  const keys = styleOptions(kind).map((o) => o.key);
+  const st: Record<string, string> = {};
+  if (opts.door && keys.includes('door')) st.door = opts.door;
+  if (opts.pull && keys.includes('pull')) st.pull = opts.pull;
+  return Object.keys(st).length ? st : undefined;
+}
 
 /** The kitchen designer options saved with the project (validated, with defaults for anything missing). */
 export function kitchenOptionsFrom(project: Project): KitchenOptions {
@@ -38,6 +53,8 @@ export function kitchenOptionsFrom(project: Project): KitchenOptions {
   const o: KitchenOptions = { ...DEFAULT_KITCHEN_OPTIONS };
   for (const [k, def] of Object.entries(DEFAULT_KITCHEN_OPTIONS)) if (typeof saved[k] === typeof def) (o as any)[k] = saved[k];
   if (!(o.layout in LAYOUT_LABELS)) o.layout = DEFAULT_KITCHEN_OPTIONS.layout;
+  if (!DOOR_STYLES.some(([v]) => v === o.door)) o.door = DEFAULT_KITCHEN_OPTIONS.door;
+  if (!PULL_STYLES.some(([v]) => v === o.pull)) o.pull = DEFAULT_KITCHEN_OPTIONS.pull;
   return o;
 }
 
@@ -342,6 +359,8 @@ function makeAt(kind: string, widthIn: number, wall: Wall, room: Room, u: number
   if (it.category === 'kitchen') {
     it.color = opts.cabinetColor;
     it.accent = opts.handleColor;
+    const style = cabinetStyleFor(kind, opts);
+    if (style) it.style = style;
   }
   if (it.category === 'appliance') it.color = opts.applianceColor;
   if (it.countertop) it.countertopColor = opts.countertopColor;

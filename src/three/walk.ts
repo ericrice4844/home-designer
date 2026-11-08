@@ -19,7 +19,7 @@ export function walkCollides(proj: Project, p: Vec2): boolean {
     }
   }
   for (const it of proj.items) {
-    if (it.height < 0.25 || it.y > 1.2 || it.category === 'lighting' || it.kind === 'rug') continue;
+    if (it.height < 0.25 || it.y > 1.2 || it.category === 'lighting' || it.category === 'people' || it.kind === 'rug') continue;
     const lx = (p.x - it.x) * Math.cos(-it.rotation) - (p.z - it.z) * Math.sin(-it.rotation);
     const lz = (p.x - it.x) * Math.sin(-it.rotation) + (p.z - it.z) * Math.cos(-it.rotation);
     if (Math.abs(lx) < it.width / 2 + R * 0.6 && Math.abs(lz) < it.depth / 2 + R * 0.6) return true;

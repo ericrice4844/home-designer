@@ -6,9 +6,10 @@ const FT = 0.3048;
 const IN = 0.0254;
 
 async function open(page: Page) {
+  // skip the one-time welcome dialog so it can't pop up in the middle of a test
+  await page.addInitScript(() => localStorage.setItem('hds-help-seen', '1'));
   await page.goto('/');
   await page.waitForFunction(() => (window as any).hds?.store);
-  await page.locator('.modal-head .btn').click({ timeout: 8000 }).catch(() => {});
   await expect(page.locator('.modal-overlay')).toHaveCount(0);
 }
 

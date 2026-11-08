@@ -9,6 +9,7 @@ import {
   dot,
   itemClearances,
   itemCorners,
+  itemLocalOutline,
   openingFrame,
   pointInItem,
   pointInPolygon,
@@ -21,6 +22,7 @@ import {
 import { createRoom, rectPoints, type Item, type Room, type Vec2 } from './model';
 import { moveItem, placeCatalogItem } from './placement';
 import { clampRoomOpenings, finishPolygon } from './edits';
+import { getStyle } from './itemStyles';
 import { store } from './state';
 import { pixelToWorld, snapToLines, worldToPixel } from './underlay';
 import { loadPlanImage, planImages } from './planImage';
@@ -1120,29 +1122,21 @@ export class PlanEditor {
       ctx.moveTo(r * 0.7, -r * 0.7);
       ctx.lineTo(-r * 0.7, r * 0.7);
       ctx.stroke();
-    } else if (it.shape === 'cylinder' || it.kind === 'round-table') {
+    } else if (it.shape !== 'model' || it.category === 'people' || isShapedTop(it) || it.kind === 'corner-base') {
+      // anything that isn't a plain box: draw its real outline (shared with the spacing measurements)
       ctx.beginPath();
-      ctx.ellipse(0, 0, w / 2, d / 2, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    } else if (it.shape === 'l-shape') {
-      const r = it.legRatio ?? 0.4;
-      ctx.beginPath();
-      ctx.moveTo(-w / 2, -d / 2);
-      ctx.lineTo(w / 2, -d / 2);
-      ctx.lineTo(w / 2, -d / 2 + d * r);
-      ctx.lineTo(-w / 2 + w * (it.kind === 'sectional' ? 0.33 : r), -d / 2 + d * r);
-      ctx.lineTo(-w / 2 + w * (it.kind === 'sectional' ? 0.33 : r), d / 2);
-      ctx.lineTo(-w / 2, d / 2);
+      itemLocalOutline(it).forEach((q, i) => (i ? ctx.lineTo(q.x * z, q.z * z) : ctx.moveTo(q.x * z, q.z * z)));
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
-    } else if (it.shape === 'footprint' && it.footprint && it.footprint.length > 2) {
-      ctx.beginPath();
-      it.footprint.forEach((p, i) => (i ? ctx.lineTo(p.x * w, p.z * d) : ctx.moveTo(p.x * w, p.z * d)));
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
+      if (it.category === 'people') {
+        // head seen from above
+        ctx.beginPath();
+        ctx.arc(0, 0, Math.min(w, d) * 0.28, 0, Math.PI * 2);
+        ctx.fillStyle = it.accent;
+        ctx.fill();
+        ctx.stroke();
+      }
     } else {
       ctx.fillRect(-w / 2, -d / 2, w, d);
       ctx.strokeRect(-w / 2, -d / 2, w, d);
@@ -1223,6 +1217,11 @@ export class PlanEditor {
 /** Drags that change the model through store.live() and must be committed (also when a pinch interrupts them). */
 export function dragNeedsCommit(kind: Drag['kind']): boolean {
   return kind !== 'pan' && kind !== 'rect' && kind !== 'measure' && kind !== 'calib';
+}
+
+function isShapedTop(it: Item) {
+  const top = getStyle(it).top;
+  return it.kind === 'round-table' || top === 'round' || top === 'oval' || top === 'racetrack';
 }
 
 function inheritDefaults(room: Room) {

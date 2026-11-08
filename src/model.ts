@@ -1,6 +1,8 @@
 // Core data model. All lengths are in meters, angles in radians.
 // Plan coordinates: x to the right, z "down" on the plan (matches three.js X/Z, Y is up).
 
+import { sanitizeStyle } from './itemStyles';
+
 export type Vec2 = { x: number; z: number };
 
 export type CeilingType = 'flat' | 'shed' | 'gable' | 'tray';
@@ -87,6 +89,7 @@ export type ItemCategory =
   | 'bath'
   | 'lighting'
   | 'decor'
+  | 'people'
   | 'custom';
 
 export type ItemShape = 'model' | 'box' | 'cylinder' | 'l-shape' | 'footprint' | 'cutout' | 'gltf';
@@ -131,6 +134,8 @@ export interface Item {
   countertopColor?: string;
   /** Prevent accidental dragging. */
   locked?: boolean;
+  /** Style & shape choices (door style, pulls, appliance type, arm shape…) – see itemStyles.ts */
+  style?: Record<string, string | number>;
 }
 
 export interface Settings {
@@ -260,7 +265,7 @@ export class ProjectError extends Error {
 
 const OPENING_TYPES: OpeningType[] = ['door', 'double-door', 'sliding-door', 'window', 'opening', 'garage-door'];
 const ITEM_SHAPES: ItemShape[] = ['model', 'box', 'cylinder', 'l-shape', 'footprint', 'cutout', 'gltf'];
-const CATEGORIES: ItemCategory[] = ['furniture', 'kitchen', 'appliance', 'bath', 'lighting', 'decor', 'custom'];
+const CATEGORIES: ItemCategory[] = ['furniture', 'kitchen', 'appliance', 'bath', 'lighting', 'decor', 'people', 'custom'];
 const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const isColor = (v: unknown): v is string => typeof v === 'string' && /^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(v);
@@ -378,6 +383,8 @@ export function normalizeProject(raw: unknown): Project {
     if (typeof it.countertop === 'boolean') item.countertop = it.countertop;
     if (isColor(it.countertopColor)) item.countertopColor = it.countertopColor;
     if (typeof it.locked === 'boolean') item.locked = it.locked;
+    const style = sanitizeStyle(item.kind, it.style);
+    if (style) item.style = style;
     if (isObj(it.light)) {
       const L = it.light;
       item.light = {

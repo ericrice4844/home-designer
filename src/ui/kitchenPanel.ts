@@ -1,10 +1,11 @@
 import { CATALOG } from '../catalog';
 import { pointInPolygon, roomWalls } from '../geometry';
-import { analyzeKitchen, generateKitchenSafe, isReplaceableKitchenItem, kitchenOptionsFrom, LAYOUT_LABELS, type KitchenLayout, type KitchenOptions } from '../kitchen';
+import { DOOR_STYLES, PULL_STYLES } from '../itemStyles';
+import { analyzeKitchen, cabinetStyleFor, generateKitchenSafe, isReplaceableKitchenItem, kitchenOptionsFrom, LAYOUT_LABELS, type KitchenLayout, type KitchenOptions } from '../kitchen';
 import type { Room } from '../model';
 import { store } from '../state';
 import { formatLength } from '../units';
-import { button, checkbox, field, h, row, section, select, toast } from './dom';
+import { button, checkbox, field, fieldGroup, h, row, section, select, toast } from './dom';
 
 const CABINET_STYLES: [string, string][] = [
   ['#ffffff', 'Pure white'],
@@ -44,7 +45,7 @@ export function kitchenPanel(onPlace: (kind: string) => void): HTMLElement {
   // options live in the project so they are saved, undoable and come back after a reload
   const opts: KitchenOptions = kitchenOptionsFrom(store.project);
   const save = () => store.update((p) => (p.kitchen = { ...opts }));
-  const room = store.selectedRoom() ?? store.project.rooms.find((r) => /kitchen/i.test(r.name)) ?? store.project.rooms[0];
+  const room = kitchenRoom();
   const units = store.project.settings.units;
   const root = h('div', { class: 'panel' });
   if (!room) {
@@ -71,11 +72,13 @@ export function kitchenPanel(onPlace: (kind: string) => void): HTMLElement {
         store.select({ type: 'wall', roomId: room.id, index: opts.wallIndex });
       }), 'Tip: tap a wall in the plan to choose it'),
       layoutDiagram(opts.layout),
-      field('Cabinets', swatchRow(CABINET_STYLES, opts.cabinetColor, (c) => (opts.cabinetColor = c))),
-      field('Countertop', swatchRow(COUNTERS, opts.countertopColor, (c) => (opts.countertopColor = c))),
-      field('Appliances', swatchRow(FINISHES, opts.applianceColor, (c) => (opts.applianceColor = c))),
-      field('Hardware', swatchRow(HANDLES, opts.handleColor, (c) => (opts.handleColor = c))),
-      opts.layout.includes('island') ? field('Island', swatchRow(CABINET_STYLES, opts.islandColor, (c) => (opts.islandColor = c))) : null,
+      fieldGroup('Cabinets', swatchRow(CABINET_STYLES, opts.cabinetColor, (c) => (opts.cabinetColor = c))),
+      fieldGroup('Countertop', swatchRow(COUNTERS, opts.countertopColor, (c) => (opts.countertopColor = c))),
+      fieldGroup('Appliances', swatchRow(FINISHES, opts.applianceColor, (c) => (opts.applianceColor = c))),
+      fieldGroup('Hardware finish', swatchRow(HANDLES, opts.handleColor, (c) => (opts.handleColor = c))),
+      fieldGroup('Door style', h('div', { class: 'chips' }, ...DOOR_STYLES.map(([v, l]) => button(l, () => ((opts.door = v), rerender()), `chip ${opts.door === v ? 'active' : ''}`)))),
+      fieldGroup('Hardware', h('div', { class: 'chips' }, ...PULL_STYLES.map(([v, l]) => button(l, () => ((opts.pull = v), rerender()), `chip ${opts.pull === v ? 'active' : ''}`)))),
+      opts.layout.includes('island') ? fieldGroup('Island', swatchRow(CABINET_STYLES, opts.islandColor, (c) => (opts.islandColor = c))) : null,
       checkbox(opts.wallCabinets, 'Upper wall cabinets & range hood', (v) => ((opts.wallCabinets = v), save())),
       checkbox(opts.replace, 'Replace existing cabinets/appliances in this room (keeps laundry & furniture)', (v) => ((opts.replace = v), save())),
       row(
@@ -126,6 +129,20 @@ export function kitchenPanel(onPlace: (kind: string) => void): HTMLElement {
   return root;
 }
 
+/**
+ * The room the Kitchen tab works on: the selected room if it has cabinets/appliances (or is called a kitchen),
+ * otherwise the kitchen – selecting a sofa in the living room must not make "Apply finishes" target the living room.
+ */
+export function kitchenRoom(): Room | undefined {
+  const p = store.project;
+  const hasKitchen = (r: Room) => /kitchen/i.test(r.name) || p.items.some((i) => (i.category === 'kitchen' || i.category === 'appliance') && pointInPolygon({ x: i.x, z: i.z }, r.points));
+  const sel = store.selectedRoom();
+  // a room or wall picked on purpose (e.g. an empty room for a new kitchen) always wins
+  const kind = store.ui.selection?.type;
+  if (sel && (kind === 'room' || kind === 'wall' || hasKitchen(sel))) return sel;
+  return p.rooms.find((r) => /kitchen/i.test(r.name)) ?? p.rooms.find(hasKitchen) ?? sel ?? p.rooms[0];
+}
+
 function applyFinishes(room: Room, opts: KitchenOptions) {
   store.update((p) => {
     p.kitchen = { ...opts };
@@ -135,6 +152,8 @@ function applyFinishes(room: Room, opts: KitchenOptions) {
       if (it.category === 'kitchen') {
         it.color = it.kind === 'island' ? opts.islandColor : opts.cabinetColor;
         it.accent = opts.handleColor;
+        const st = cabinetStyleFor(it.kind, opts);
+        if (st) it.style = { ...(it.style ?? {}), ...st };
       }
       if (it.category === 'appliance' && it.kind !== 'wall-oven') it.color = opts.applianceColor;
       if (it.kind === 'wall-oven') {

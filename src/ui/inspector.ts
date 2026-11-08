@@ -4,9 +4,10 @@ import { FT, IN, uid, type CeilingType, type FloorType, type Item, type ItemShap
 import { clampOpening, duplicateRoom, freeOpeningOffset, itemsInRoom, scaleRoom, setWallLength, splitWall } from '../edits';
 import { store } from '../state';
 import { elevationForItem, elevationForRoom, wallViewSection } from './elevation';
+import { styleSection } from './stylePanel';
 import { floorPreview } from '../three/textures';
 import { formatArea, formatLength } from '../units';
-import { button, checkbox, colorInput, field, h, lengthInput, numberInput, row, section, select, slider, toast } from './dom';
+import { button, checkbox, colorInput, field, h, lengthInput, numberInput, row, section, select, slider, toast, fieldGroup } from './dom';
 import { addToLibrary, footprintEditor, FOOTPRINTS, importPatternImage } from './importers';
 
 export const WALL_SWATCHES = ['#ffffff', '#f1ede4', '#ece6dc', '#e3e7e1', '#dfe5ec', '#d6cfc4', '#c9b9a3', '#a7b8a8', '#8fa3b8', '#5d7285', '#3f4a59', '#7a4e3a', '#b85c4b', '#e8c872'];
@@ -390,6 +391,8 @@ export function itemPanel(it: Item): HTMLElement {
     if (it.shape === 'footprint') look.append(footprintEditor(it.footprint ?? FOOTPRINTS.rectangle, (pts) => upd((q) => (q.footprint = pts))));
   }
   root.append(look);
+  const styled = styleSection(it);
+  if (styled) root.append(styled);
 
   if (it.light) {
     const L = it.light;
@@ -399,7 +402,7 @@ export function itemPanel(it: Item): HTMLElement {
         checkbox(L.on, 'Light on', (v) => upd((q) => q.light && (q.light.on = v))),
         field('Brightness', slider(L.intensity, 0.5, 20, 0.5, (v) => live((q) => q.light && (q.light.intensity = v)))),
         field('Reach', lengthInput(L.range, (v) => upd((q) => q.light && (q.light.range = v)), { min: 0.5 })),
-        field('Color temperature', h('div', { class: 'chips' }, ...[
+        fieldGroup('Color temperature', h('div', { class: 'chips' }, ...[
           ['2700K warm', '#ffd7a3'],
           ['3000K soft', '#ffe2b8'],
           ['4000K neutral', '#fff1df'],

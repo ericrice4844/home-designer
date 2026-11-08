@@ -97,6 +97,13 @@ export const CATALOG: CatalogEntry[] = [
   { kind: 'wall-art', name: 'Wall Art', category: 'decor', w: 36, d: 1.5, h: 24, y: 54, color: '#e0b25a', accent: '#222222', wallSnap: true, icon: '🖼️' },
   { kind: 'curtains', name: 'Curtains', category: 'decor', w: 72, d: 4, h: 90, y: 2, color: '#d9cdb8', wallSnap: true, icon: '🪟' },
 
+  // People for scale (not obstacles; change the height to match your family)
+  { kind: 'person-man', name: 'Adult (5′10″)', category: 'people', w: 20, d: 12, h: 70, color: '#4a6fa5', accent: '#d9a787', icon: '🧍' },
+  { kind: 'person-woman', name: 'Adult (5′5″)', category: 'people', w: 18, d: 11, h: 65, color: '#b5577a', accent: '#c68e6b', icon: '🧍‍♀️' },
+  { kind: 'person-child', name: 'Child (4′)', category: 'people', w: 13, d: 8, h: 48, color: '#e0a83e', accent: '#e2b594', icon: '🧒' },
+  { kind: 'person-seated', name: 'Seated adult', category: 'people', w: 22, d: 30, h: 52, color: '#5b8c6a', accent: '#d9a787', icon: '🪑' },
+  { kind: 'person-wheelchair', name: 'Wheelchair user', category: 'people', w: 26, d: 42, h: 52, color: '#6b5b95', accent: '#c68e6b', icon: '♿' },
+
   // Primitive shapes for custom pieces
   { kind: 'box', name: 'Box / Block', category: 'custom', w: 24, d: 24, h: 24, color: '#9aa7b4', icon: '⬜' },
   { kind: 'cylinder', name: 'Cylinder', category: 'custom', w: 24, d: 24, h: 30, color: '#9aa7b4', icon: '⚫' },
@@ -112,6 +119,7 @@ export const CATEGORY_LABELS: Record<ItemCategory, string> = {
   bath: 'Bath',
   lighting: 'Lighting',
   decor: 'Decor',
+  people: 'People (for scale)',
   custom: 'Shapes & Imports',
 };
 

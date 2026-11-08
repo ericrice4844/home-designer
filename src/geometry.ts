@@ -1,3 +1,4 @@
+import { getStyle } from './itemStyles';
 import type { Item, Opening, Project, Room, Vec2 } from './model';
 
 export const EPS = 1e-6;
@@ -349,32 +350,51 @@ export function itemClearances(project: Project, item: Item, maxDist = 6): Clear
 
 /** Things you can walk on / that hang on walls or ceilings do not block space. */
 export function isObstacle(it: Item): boolean {
-  return !(it.kind === 'rug' || it.category === 'lighting' || it.kind === 'wall-art' || it.kind === 'curtains');
+  return !(it.kind === 'rug' || it.category === 'lighting' || it.category === 'people' || it.kind === 'wall-art' || it.kind === 'curtains');
 }
 
 /** World-space outline of an item's real footprint (L-shapes, round tables, custom footprints…). */
 export function itemOutline(it: Item): Vec2[] {
+  return itemLocalOutline(it).map((q) => add(rotate(q, it.rotation), { x: it.x, z: it.z }));
+}
+
+const ellipse = (rx: number, rz: number, n = 24): Vec2[] => Array.from({ length: n }, (_, i) => ({ x: Math.cos((i / n) * Math.PI * 2) * rx, z: Math.sin((i / n) * Math.PI * 2) * rz }));
+
+/** An item's real footprint in its own frame (centre at 0, front toward +z): L-shapes, round/oval tables, people… */
+export function itemLocalOutline(it: Item): Vec2[] {
   const w = it.width;
   const d = it.depth;
-  let local: Vec2[];
-  if (it.shape === 'cylinder' || it.kind === 'round-table') {
-    local = Array.from({ length: 16 }, (_, i) => ({ x: (Math.cos((i / 16) * Math.PI * 2) * w) / 2, z: (Math.sin((i / 16) * Math.PI * 2) * d) / 2 }));
-  } else if (it.shape === 'l-shape') {
+  const st = getStyle(it);
+  const top = st.top as string | undefined;
+  if (it.shape === 'cylinder' || (it.kind === 'round-table' && top !== 'oval') || top === 'round') {
+    const r = it.shape === 'cylinder' ? null : Math.min(w, d) / 2;
+    return r === null ? ellipse(w / 2, d / 2, 16) : ellipse(r, r);
+  }
+  if (top === 'oval' || it.category === 'people') return ellipse(w / 2, d / 2);
+  if (top === 'racetrack') {
+    const r = Math.min(w, d) / 2;
+    const pts: Vec2[] = [];
+    for (let i = 0; i <= 8; i++) pts.push({ x: w / 2 - r + Math.cos(-Math.PI / 2 + (i / 8) * Math.PI) * r, z: Math.sin(-Math.PI / 2 + (i / 8) * Math.PI) * r });
+    for (let i = 0; i <= 8; i++) pts.push({ x: -w / 2 + r + Math.cos(Math.PI / 2 + (i / 8) * Math.PI) * r, z: Math.sin(Math.PI / 2 + (i / 8) * Math.PI) * r });
+    return pts;
+  }
+  if (it.shape === 'l-shape') {
     const r = it.legRatio ?? 0.4;
     const xr = it.kind === 'sectional' ? 0.33 : r;
-    local = [
+    const flip = it.kind === 'sectional' && st.chaise === 'right' ? -1 : 1; // chaise on the right: mirror
+    return [
       { x: -0.5, z: -0.5 },
       { x: 0.5, z: -0.5 },
       { x: 0.5, z: -0.5 + r },
       { x: -0.5 + xr, z: -0.5 + r },
       { x: -0.5 + xr, z: 0.5 },
       { x: -0.5, z: 0.5 },
-    ].map((q) => ({ x: q.x * w, z: q.z * d }));
-  } else if (it.shape === 'footprint' && it.footprint && it.footprint.length >= 3) {
-    local = it.footprint.map((q) => ({ x: q.x * w, z: q.z * d }));
-  } else if (it.kind === 'corner-base') {
+    ].map((q) => ({ x: q.x * w * flip, z: q.z * d }));
+  }
+  if (it.shape === 'footprint' && it.footprint && it.footprint.length >= 3) return it.footprint.map((q) => ({ x: q.x * w, z: q.z * d }));
+  if (it.kind === 'corner-base') {
     const leg = Math.min(0.61, w, d);
-    local = [
+    return [
       { x: -w / 2, z: -d / 2 },
       { x: w / 2, z: -d / 2 },
       { x: w / 2, z: -d / 2 + leg },
@@ -382,10 +402,13 @@ export function itemOutline(it: Item): Vec2[] {
       { x: -w / 2 + leg, z: d / 2 },
       { x: -w / 2, z: d / 2 },
     ];
-  } else {
-    return itemCorners(it);
   }
-  return local.map((q) => add(rotate(q, it.rotation), { x: it.x, z: it.z }));
+  return [
+    { x: -w / 2, z: -d / 2 },
+    { x: w / 2, z: -d / 2 },
+    { x: w / 2, z: d / 2 },
+    { x: -w / 2, z: d / 2 },
+  ];
 }
 
 /**
