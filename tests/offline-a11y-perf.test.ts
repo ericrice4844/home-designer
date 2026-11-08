@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { serviceWorkerSource } from '../build/serviceWorker';
 import { watchForUpdates, type SWLike } from '../src/swUpdate';
-import { renderPixelRatio, structureMayHaveChanged } from '../src/three/perf';
+import { cameraKey, RenderGate, renderPixelRatio, structureMayHaveChanged } from '../src/three/perf';
 import { button } from '../src/ui/dom';
 import { settingsPanel, itemPanel } from '../src/ui/inspector';
 import { libraryPanel } from '../src/ui/library';
@@ -172,5 +172,46 @@ describe('6.4 mobile performance', () => {
   });
   it('the 3D renderer no longer keeps the drawing buffer', () => {
     expect(readFileSync('src/three/viewer.ts', 'utf8')).not.toMatch(/preserveDrawingBuffer:\s*true/);
+  });
+});
+
+describe('3D view renders on demand', () => {
+  const I = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const cam = cameraKey(I, I);
+  it('draws the first frame, then idles while nothing changes', () => {
+    const g = new RenderGate(1000);
+    expect(g.shouldRender(0, cam)).toBe(true);
+    expect(g.shouldRender(16, cam)).toBe(false);
+    expect(g.shouldRender(500, cam)).toBe(false);
+  });
+  it('draws again once invalidated, and only once', () => {
+    const g = new RenderGate(1000);
+    g.shouldRender(0, cam);
+    g.invalidate();
+    expect(g.shouldRender(16, cam)).toBe(true);
+    expect(g.shouldRender(32, cam)).toBe(false);
+  });
+  it('draws when the camera moves (orbit, zoom, damping)', () => {
+    const g = new RenderGate(1000);
+    g.shouldRender(0, cam);
+    const moved = [...I];
+    moved[12] = 0.25;
+    expect(g.shouldRender(16, cameraKey(moved, I))).toBe(true);
+    expect(g.shouldRender(32, cameraKey(moved, I))).toBe(false);
+    const zoomed = [...I];
+    zoomed[0] = 2;
+    expect(g.shouldRender(48, cameraKey(moved, zoomed))).toBe(true);
+  });
+  it('draws every frame in continuous modes (walking, dragging)', () => {
+    const g = new RenderGate(1000);
+    g.shouldRender(0, cam);
+    expect(g.shouldRender(16, cam, true)).toBe(true);
+    expect(g.shouldRender(32, cam, true)).toBe(true);
+  });
+  it('still refreshes slowly while idle, as a safety net', () => {
+    const g = new RenderGate(1000);
+    g.shouldRender(0, cam);
+    expect(g.shouldRender(999, cam)).toBe(false);
+    expect(g.shouldRender(1000, cam)).toBe(true);
   });
 });

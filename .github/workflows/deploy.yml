@@ -11,13 +11,17 @@ permissions:
   pages: write
   id-token: write
 
+# Tests are grouped per pull request, or per commit for pushes: a new push to main no longer
+# cancels the tests (or the deploy) of the commit before it, and re-running an old run can't
+# cancel a newer one. Deploys have their own queue below.
 concurrency:
-  group: pages-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,7 +37,13 @@ jobs:
           path: dist
 
   e2e:
+    # desktop and phone run side by side, halving the wall-clock time
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [desktop, phone]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,11 +52,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+      - run: npm run test:e2e -- --project=${{ matrix.project }}
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-results
+          name: playwright-results-${{ matrix.project }}
           path: test-results
 
   deploy:
@@ -54,10 +64,29 @@ jobs:
     needs: [build, e2e]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # one deploy at a time, never cancelled half-way; a newer waiting deploy replaces an older one
+    concurrency:
+      group: pages-deploy
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/configure-pages@v5
-      - id: deployment
+      - name: Only deploy the newest commit on main
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
+          if [ "$head" = "${{ github.sha }}" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping deploy: ${{ github.sha }} is no longer the head of main ($head), so it would overwrite newer code."
+          fi
+      - if: steps.latest.outputs.current == 'true'
+        uses: actions/configure-pages@v5
+      - if: steps.latest.outputs.current == 'true'
+        id: deployment
         uses: actions/deploy-pages@v4

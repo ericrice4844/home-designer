@@ -8,7 +8,7 @@ import { store, type CameraMode } from '../state';
 import { formatLength } from '../units';
 import { snapOnWall, moveOnWall, wallCoords, wallElevation, type Elevation } from '../elevation';
 import { clearOverlay } from './overlay';
-import { renderPixelRatio, structureMayHaveChanged } from './perf';
+import { cameraKey, RenderGate, renderPixelRatio, structureMayHaveChanged } from './perf';
 import { resolvePick } from './pick';
 import { configureSunShadow } from './sun';
 import { walkCollides, walkStart } from './walk';
@@ -66,6 +66,8 @@ export class Viewer {
   private lightPool: THREE.PointLight[] = [];
   private lightKey = '';
   private lightsDirty = true;
+  /** frames are drawn only when something changed (see RenderGate) */
+  private gate = new RenderGate(1000);
 
   constructor(container: HTMLElement) {
     this.el = container;
@@ -143,6 +145,7 @@ export class Viewer {
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
     store.subscribe((r) => {
+      this.gate.invalidate();
       if (r === 'ui') this.updateSelection();
       else {
         this.needsRebuild = true;
@@ -154,6 +157,7 @@ export class Viewer {
 
   setVisible(v: boolean) {
     this.visible = v;
+    this.gate.invalidate();
     if (v) this.resize();
   }
 
@@ -448,6 +452,7 @@ export class Viewer {
   }
 
   setMode(mode: CameraMode) {
+    this.gate.invalidate();
     this.focusRoomId = null; // any camera change leaves the single-room wall view
     this.wallView = null;
     const prev = this.mode;
@@ -497,6 +502,7 @@ export class Viewer {
 
   /** Rotate the current view around its target by degrees. */
   rotateView(deg: number) {
+    this.gate.invalidate();
     const ctrl = this.mode === 'orbit' ? this.orbitP : this.orbitO;
     if (this.mode === 'walk') {
       this.walk.yaw += (deg * Math.PI) / 180;
@@ -512,6 +518,7 @@ export class Viewer {
 
   /** Orthographic front view square-on to one wall, from inside the room (an elevation in 3D). */
   viewWall(roomId: string, index: number) {
+    this.gate.invalidate();
     const room = store.room(roomId);
     const wall = room && roomWalls(room).find((w) => w.index === index);
     if (!room || !wall) return;
@@ -535,6 +542,7 @@ export class Viewer {
   }
 
   zoomToFit() {
+    this.gate.invalidate();
     const c = this.houseCenter();
     if (this.mode === 'orbit') {
       this.orbitP.target.set(c.x, 1, c.z);
@@ -619,6 +627,9 @@ export class Viewer {
 
   private bindEvents() {
     const cv = this.renderer.domElement;
+    // any direct input may change what is shown; camera moves are also caught by the camera key
+    for (const ev of ['pointerdown', 'pointerup', 'wheel'] as const) cv.addEventListener(ev, () => this.gate.invalidate(), { passive: true });
+    window.addEventListener('keydown', () => this.gate.invalidate());
     cv.addEventListener('pointerdown', (e) => {
       if (this.mode === 'walk') {
         // left half bottom area handled by joystick; elsewhere look
@@ -784,6 +795,7 @@ export class Viewer {
     const w = this.el.clientWidth;
     const h = this.el.clientHeight;
     if (!w || !h) return;
+    this.gate.invalidate();
     this.renderer.setSize(w, h);
     this.labels.setSize(w, h);
     this.persp.aspect = w / h;
@@ -831,10 +843,15 @@ export class Viewer {
     if (this.needsRebuild) {
       this.needsRebuild = false;
       this.rebuild();
+      this.gate.invalidate();
     }
     if (this.mode === 'walk') this.updateWalk(dt);
     else if (this.mode === 'orbit') this.orbitP.update();
     else this.orbitO.update();
+    const view = this.camera();
+    view.updateMatrixWorld();
+    const camKey = cameraKey(view.matrixWorld.elements, view.projectionMatrix.elements);
+    if (!this.gate.shouldRender(performance.now(), camKey, this.mode === 'walk' || !!this.drag)) return;
     if (this.selBox.visible) {
       const sel = store.ui.selection;
       const e = sel?.type === 'item' ? this.items.get(sel.id) : undefined;

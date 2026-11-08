@@ -124,20 +124,40 @@ test.describe('3D checks (review Phase 2)', () => {
       store.select({ type: 'item', id: it.id });
       const s = app.plan.toScreen({ x: it.x, z: it.z });
       const r = app.plan.canvas.getBoundingClientRect();
-      return { x: r.left + s.x, y: r.top + s.y };
+      return { x: r.left + s.x, y: r.top + s.y, x0: it.x, z0: it.z };
     });
     const cdp = await page.context().newCDPSession(page);
     const heap = async () => {
       await cdp.send('HeapProfiler.collectGarbage');
       return (await cdp.send('Runtime.getHeapUsage')).usedSize;
     };
+    // Real press/release (so pointer capture is genuine), but the moves are dispatched in the page:
+    // each Playwright mouse.move waits for a rendered frame, which under software WebGL on a CI runner
+    // costs hundreds of ms — hundreds of them timed the test out. Drawing after every move keeps the
+    // work per step the same as a real drag (live update + full redraw with clearances).
     const drag = async (n: number) => {
       await page.mouse.move(target.x, target.y);
       await page.mouse.down();
-      for (let i = 0; i < n; i++) await page.mouse.move(target.x + 40 * Math.sin(i / 5), target.y + 40 * Math.cos(i / 5));
+      await page.evaluate(
+        ({ x, y, n }) => {
+          const { app } = (window as any).hds;
+          const cv: HTMLCanvasElement = app.plan.canvas;
+          for (let i = 0; i < n; i++) {
+            const opts = { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, buttons: 1 };
+            cv.dispatchEvent(new PointerEvent('pointermove', { ...opts, clientX: x + 40 * Math.sin(i / 5), clientY: y + 40 * Math.cos(i / 5) }));
+            app.plan.draw();
+          }
+        },
+        { ...target, n },
+      );
       await page.mouse.up();
     };
     await drag(40); // warm up caches
+    const moved = await page.evaluate(({ x0, z0 }) => {
+      const it = (window as any).hds.store.project.items.find((i: any) => i.kind === 'coffee-table');
+      return Math.hypot(it.x - x0, it.z - z0);
+    }, target);
+    expect(moved).toBeGreaterThan(0.05); // the dispatched moves really dragged the table
     const start = await heap();
     for (let k = 0; k < 4; k++) await drag(100);
     const growth = (await heap()) - start;
