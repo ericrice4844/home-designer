@@ -295,3 +295,53 @@ export function anchorToWall(project: Project, itemId: string, roomId: string, i
   it.x = p.x;
   it.z = p.z;
 }
+
+/**
+ * Change a piece's width in place on the wall: its left edge stays put (it grows to the right), and it is kept
+ * on the wall – shifted left, or narrowed, if it would run past the end.
+ */
+export function resizeOnWall(project: Project, roomId: string, index: number, itemId: string, width: number) {
+  const it = project.items.find((i) => i.id === itemId);
+  const before = wallElevation(project, roomId, index, { include: [itemId] });
+  const me = before?.items.find((i) => i.item.id === itemId);
+  if (!it || !before || !me) return;
+  const w = Math.max(0.05, Math.min(before.length, width));
+  const keepLeft = me.s0;
+  it.width = w;
+  const after = wallElevation(project, roomId, index, { include: [itemId] })!;
+  const now = after.items.find((i) => i.item.id === itemId)!;
+  const target = Math.max(0, Math.min(after.length - (now.s1 - now.s0), keepLeft));
+  moveOnWall(project, after, itemId, target);
+}
+
+/**
+ * Copy a piece next to the original on the same wall: to its right if there is room, else to its left, else into
+ * the first free gap. Returns the new item's id, or null when the wall has no room for it.
+ */
+export function duplicateOnWall(project: Project, roomId: string, index: number, itemId: string, newId: string): string | null {
+  const src = project.items.find((i) => i.id === itemId);
+  const el = wallElevation(project, roomId, index, { include: [itemId] });
+  const me = el?.items.find((i) => i.item.id === itemId);
+  if (!src || !el || !me) return null;
+  const copy: Item = { ...JSON.parse(JSON.stringify(src)), id: newId };
+  project.items.push(copy);
+  const el2 = wallElevation(project, roomId, index, { include: [itemId, newId] })!;
+  const w = me.s1 - me.s0;
+  const candidates = [me.s1, me.s0 - w];
+  // then every gap along the wall, left to right
+  const edges = [0, ...el2.items.filter((i) => i.item.id !== newId).map((i) => i.s1)].sort((a, b) => a - b);
+  candidates.push(...edges);
+  for (const s0 of candidates) {
+    if (s0 < -1e-6 || s0 + w > el2.length + 1e-6) continue;
+    if (overlapsOnWall(el2, newId, s0, me.y0)) continue;
+    moveOnWall(project, el2, newId, s0, me.y0);
+    return newId;
+  }
+  project.items = project.items.filter((i) => i.id !== newId);
+  return null;
+}
+
+/** Map a point on the wall's plane (3D: x, height above the room floor, z) to the wall's s / y coordinates. */
+export function wallCoords(el: Elevation, p: { x: number; z: number }, heightAboveFloor: number): { s: number; y: number } {
+  return { s: dot(p, el.frame.right) - el.frame.sMin, y: heightAboveFloor };
+}

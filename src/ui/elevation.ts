@@ -1,10 +1,13 @@
 // Wall view: the list of things on the selected wall, a dimensioned elevation drawing, and "view in 3D".
-import { anchorToWall, canLift, itemWall, moveOnWall, neighbourWall, overlapsOnWall, snapOnWall, wallElevation, wallLabel, wallsByDistance, type Elevation } from '../elevation';
+import { anchorToWall, canLift, duplicateOnWall, itemWall, moveOnWall, resizeOnWall, neighbourWall, overlapsOnWall, snapOnWall, wallElevation, wallLabel, wallsByDistance, type Elevation } from '../elevation';
 import { roomWalls } from '../geometry';
 import type { Room } from '../model';
 import { store } from '../state';
 import { formatLength } from '../units';
-import { button, h, modal, section, toast } from './dom';
+import { catalogEntry } from '../catalog';
+import { getStyle, styleOptions } from '../itemStyles';
+import { uid, type Item } from '../model';
+import { button, fieldGroup, h, lengthInput, modal, section, toast } from './dom';
 import { buildPrintDocument } from './print';
 
 const fmt = (m: number) => formatLength(m, store.project.settings.units);
@@ -230,7 +233,9 @@ export function openElevation(roomId: string, wallIndex: number, opts: { include
     store.update((p) => include.forEach((id) => anchorToWall(p, id, roomId, index)));
     render();
   });
-  let drag: (DragView & { start: { x: number; y: number }; s0: number; y0: number; el: Elevation; moved: boolean; pointerId: number }) | null = null;
+  const editBar = h('div', { class: 'el-editbar', role: 'region', 'aria-label': 'Selected piece' });
+  let selected: string | undefined = opts.focus;
+  let drag: (DragView & { start: { x: number; y: number }; s0: number; y0: number; el: Elevation; moved: boolean; pointerId: number; locked: boolean }) | null = null;
   let suppressClick = false;
 
   const current = () => {
@@ -246,8 +251,9 @@ export function openElevation(roomId: string, wallIndex: number, opts: { include
     );
     const width = Math.max(320, Math.min(1000, window.innerWidth - 60));
     const height = Math.max(260, window.innerHeight - 300); // leave room for the dialog's header and buttons
-    const sel = opts.focus ?? (store.ui.selection?.type === 'item' ? store.ui.selection.id : undefined);
-    holder.replaceChildren(elevationSvg(el, width, sel, drag ?? undefined, height));
+    if (selected && !el.items.some((i) => i.item.id === selected)) selected = undefined; // deleted / moved off this wall
+    holder.replaceChildren(elevationSvg(el, width, selected, drag ?? undefined, height - 110));
+    renderEditBar(el);
     if (!el.items.length && !el.openings.length) holder.append(h('p', { class: 'hint' }, 'Nothing is placed against this wall yet.'));
     pushBtn.hidden = !el.items.some((i) => i.projected);
   };
@@ -271,8 +277,8 @@ export function openElevation(roomId: string, wallIndex: number, opts: { include
     const id = g.getAttribute('data-item-id')!;
     const el = current();
     const it = el?.items.find((i) => i.item.id === id);
-    if (!el || !it || it.item.locked) return;
-    drag = { id, guides: [], overlap: false, start: { x: e.clientX, y: e.clientY }, s0: it.s0, y0: it.y0, el, moved: false, pointerId: e.pointerId };
+    if (!el || !it) return;
+    drag = { id, guides: [], overlap: false, start: { x: e.clientX, y: e.clientY }, s0: it.s0, y0: it.y0, el, moved: false, pointerId: e.pointerId, locked: !!it.item.locked };
     holder.setPointerCapture(e.pointerId);
   });
   holder.addEventListener('pointermove', (e) => {
@@ -284,8 +290,9 @@ export function openElevation(roomId: string, wallIndex: number, opts: { include
     const k = (svg.scaleK ?? 1) * (rect.width / Number(svg.getAttribute('width')));
     const dx = e.clientX - drag.start.x;
     const dy = e.clientY - drag.start.y;
-    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    if (drag.locked || (!drag.moved && Math.hypot(dx, dy) < 5)) return;
     drag.moved = true;
+    selected = drag.id;
     const free = { s0: drag.s0 + dx / k, y0: drag.y0 - dy / k };
     const snap = e.altKey ? { ...free, guides: [] } : snapOnWall(drag.el, drag.id, free.s0, free.y0, 8 / k);
     const id = drag.id;
@@ -306,10 +313,12 @@ export function openElevation(roomId: string, wallIndex: number, opts: { include
       render();
       return;
     }
-    if (e.type === 'pointerup') {
-      store.select({ type: 'item', id });
-      m.close();
-    }
+    if (e.type === 'pointerup') select(id); // a tap selects the piece right here
+  };
+  const select = (id: string | undefined) => {
+    selected = id;
+    if (id) store.select({ type: 'item', id });
+    render();
   };
   holder.addEventListener('pointerup', endDrag);
   holder.addEventListener('pointercancel', endDrag);
@@ -317,17 +326,14 @@ export function openElevation(roomId: string, wallIndex: number, opts: { include
   holder.addEventListener('click', (e) => {
     if (suppressClick) return;
     const g = (e.target as Element).closest('[data-item-id]');
-    if (!g) return;
-    store.select({ type: 'item', id: g.getAttribute('data-item-id')! });
-    m.close();
+    select(g ? g.getAttribute('data-item-id')! : undefined); // tapping empty wall clears the selection
   });
   holder.addEventListener('keydown', (e) => {
     const g = (e.target as Element).closest('[data-item-id]');
     if (!g) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      store.select({ type: 'item', id: g.getAttribute('data-item-id')! });
-      m.close();
+      select(g.getAttribute('data-item-id')!);
       return;
     }
     // keyboard nudging: ← → along the wall (1"), ↑ ↓ for wall-hung pieces; Shift = 1'
@@ -344,12 +350,83 @@ export function openElevation(roomId: string, wallIndex: number, opts: { include
     (holder.querySelector(`[data-item-id="${id}"]`) as HTMLElement | null)?.focus();
   });
 
+  /** Controls for the selected piece, under the drawing. */
+  const renderEditBar = (el: Elevation) => {
+    const e = selected ? el.items.find((i) => i.item.id === selected) : undefined;
+    if (!e) {
+      editBar.replaceChildren(h('p', { class: 'hint' }, 'Tap a piece in the drawing to edit it here.'));
+      return;
+    }
+    const it = e.item;
+    const id = it.id;
+    const upd = (fn: (q: Item) => void) =>
+      store.update((p) => {
+        const q = p.items.find((i) => i.id === id);
+        if (q) fn(q);
+      });
+    const entry = catalogEntry(it.kind);
+    const widthBox = h('div', { class: 'el-field' },
+      h('span', { class: 'field-label' }, 'Width'),
+      lengthInput(e.s1 - e.s0, (v) => store.update((p) => resizeOnWall(p, roomId, index, id, v)), { min: 0.05 }),
+    );
+    const controls: HTMLElement[] = [widthBox];
+    if (entry?.widths)
+      controls.push(
+        fieldGroup('Standard widths', h('div', { class: 'chips' }, ...entry.widths.map((w) => button(`${w}"`, () => store.update((p) => {
+          resizeOnWall(p, roomId, index, id, w * 0.0254);
+          const q = p.items.find((i) => i.id === id);
+          if (q) q.name = `${entry.name} ${w}"`;
+        }), `chip ${Math.abs((e.s1 - e.s0) / 0.0254 - w) < 0.3 ? 'active' : ''}`)))),
+      );
+    controls.push(h('div', { class: 'el-field' }, h('span', { class: 'field-label' }, 'Height'), lengthInput(it.height, (v) => upd((q) => (q.height = v)), { min: 0.02 })));
+    if (canLift(e)) controls.push(h('div', { class: 'el-field' }, h('span', { class: 'field-label' }, 'Off the floor'), lengthInput(e.y0, (v) => store.update((p) => moveOnWall(p, el, id, e.s0, v)), { min: 0 })));
+    for (const o of styleOptions(it.kind)) {
+      if (o.type !== 'choice') continue;
+      const sel = h('select', { 'aria-label': o.label }, ...o.options.map(([v, l]) => h('option', { value: v, selected: getStyle(it)[o.key] === v }, l)));
+      sel.addEventListener('change', () => upd((q) => (q.style = { ...(q.style ?? {}), [o.key]: sel.value })));
+      controls.push(h('div', { class: 'el-field' }, h('span', { class: 'field-label' }, o.label), sel));
+    }
+    const color = h('input', { type: 'color', value: it.color, 'aria-label': 'Color' });
+    color.addEventListener('change', () => upd((q) => (q.color = color.value)));
+    controls.push(h('div', { class: 'el-field' }, h('span', { class: 'field-label' }, 'Color'), color));
+    const lockBtn = button(it.locked ? '🔓 Unlock' : '🔒 Lock', () => upd((q) => (q.locked = !q.locked)), 'small');
+    editBar.replaceChildren(
+      h('div', { class: 'el-edit-head' },
+        h('b', {}, it.name),
+        h('span', { class: 'hint' }, `${fmt(e.s0)} from left${e.y0 > 0.02 ? ` · ${fmt(e.y0)} up` : ''}${e.projected ? ` · ${fmt(e.gap)} out from the wall` : ''}`),
+        h('div', { class: 'row' },
+          button('⧉ Copy', () => {
+            let newId: string | null = null;
+            store.update((p) => (newId = duplicateOnWall(p, roomId, index, id, uid('item'))));
+            if (newId) select(newId);
+            else toast('No room on this wall for a copy');
+          }, 'small', 'Copy next to it on this wall'),
+          lockBtn,
+          button('🗑 Delete', () => {
+            store.update((p) => (p.items = p.items.filter((i) => i.id !== id)));
+            select(undefined);
+          }, 'small danger'),
+          button('✎ More options', () => {
+            store.select({ type: 'item', id });
+            m.close();
+          }, 'small', 'All settings in the Edit panel'),
+        ),
+      ),
+      h('div', { class: 'el-controls' }, ...controls),
+    );
+  };
+  // keep the drawing in step with edits made anywhere (undo, the edit bar, other panels)
+  const unsubscribe = store.subscribe((r) => {
+    if (r !== 'live' && !drag && document.body.contains(holder)) render();
+  });
+
   const body = h(
     'div',
     { class: 'elevation' },
     h('div', { class: 'row wrap elevation-bar' }, button('◀', () => step(-1), 'icon', 'Previous wall'), wallSelect, button('▶', () => step(1), 'icon', 'Next wall')),
     holder,
-    h('p', { class: 'hint' }, 'Seen from inside the room. Drag a piece to move it along the wall (wall-hung pieces also up/down); it snaps to neighbours, centres and standard heights – hold Alt for free movement. Tap a piece to edit it. Red: widths along the floor · blue: wall-hung · purple: heights.'),
+    editBar,
+    h('p', { class: 'hint' }, 'Seen from inside the room. Tap a piece to edit it below; drag it along the wall (wall-hung pieces also up/down) – it snaps to neighbours, centres and standard heights, hold Alt for free movement. Red: widths along the floor · blue: wall-hung · purple: heights.'),
   );
   const m = modal('Wall elevation', body, [
     pushBtn,
@@ -369,6 +446,12 @@ export function openElevation(roomId: string, wallIndex: number, opts: { include
     button('Done', () => m.close(), 'primary'),
   ]);
   m.el.querySelector('.modal')?.classList.add('wide');
+  new MutationObserver((_, obs) => {
+    if (!m.el.isConnected) {
+      obs.disconnect();
+      unsubscribe();
+    }
+  }).observe(document.body, { childList: true });
   render();
 }
 

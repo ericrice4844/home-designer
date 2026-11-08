@@ -1342,3 +1342,52 @@ input.len.big {
   stroke: #2f80ed;
   stroke-width: 3;
 }
+
+/* elevation edit bar */
+.el-editbar {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  background: var(--panel-2);
+}
+.el-editbar .hint {
+  margin: 0;
+}
+.el-edit-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-bottom: 6px;
+}
+.el-edit-head .row {
+  margin: 0 0 0 auto;
+}
+.el-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: flex-end;
+}
+.el-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.el-field input.len {
+  width: 110px;
+}
+.el-field select {
+  width: auto;
+  max-width: 190px;
+}
+.el-controls .field {
+  margin: 0;
+}
+@media (max-width: 820px) {
+  .el-edit-head .row {
+    margin-left: 0;
+  }
+}

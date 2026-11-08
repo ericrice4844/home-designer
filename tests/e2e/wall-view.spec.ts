@@ -56,10 +56,14 @@ test('select a kitchen wall, see its items, open the elevation and pick a cabine
   await page.getByRole('button', { name: 'Previous wall' }).click();
   await expect(wallSelect).toHaveValue(before);
 
-  // tapping a piece selects it for editing
+  // tapping a piece selects it right in the drawing, with an edit bar underneath
   await svg.locator(`[data-item-id="${rangeId}"] rect`).first().click();
-  await expect(page.locator('.modal-overlay')).toHaveCount(0);
+  await expect(page.locator('.modal-overlay')).toHaveCount(1);
+  await expect(page.locator('.el-editbar')).toContainText('Range');
   expect(await page.evaluate(() => (window as any).hds.store.ui.selection)).toEqual({ type: 'item', id: rangeId });
+  // "More options" opens the full Edit panel
+  await page.getByRole('button', { name: /More options/ }).click();
+  await expect(page.locator('.modal-overlay')).toHaveCount(0);
 });
 
 test('view a wall square-on in 3D, showing only that room', async ({ page, isMobile }) => {
@@ -238,4 +242,102 @@ test('style a sofa and the kitchen cabinets, and place a person for scale', asyn
   const person = await page.evaluate(() => (window as any).hds.store.selectedItem());
   expect(person.category).toBe('people');
   expect(person.height).toBeCloseTo(70 * 0.0254, 3);
+});
+
+test('edit pieces right in the elevation: width, door style, copy, delete, undo', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'desktop only');
+  await open(page);
+  await selectRangeWall(page);
+  await page.getByRole('button', { name: '📐 Wall elevation', exact: true }).click();
+  // pick the narrow upper cabinet: it has room to grow
+  const target = await page.evaluate(() => {
+    const ids = [...document.querySelectorAll('.elevation-holder [data-item-id]')].map((g) => g.getAttribute('data-item-id')!);
+    const { store } = (window as any).hds;
+    const uppers = ids.map((id) => store.item(id)).filter((i: any) => i.kind === 'wall-cabinet').sort((a: any, b: any) => a.width - b.width);
+    return uppers[0].id as string;
+  });
+  const item = () => page.evaluate((id) => (window as any).hds.store.item(id), target);
+  const leftEdge = () =>
+    page.evaluate((id) => document.querySelector(`.elevation-holder [data-item-id="${id}"] rect`)!.getBoundingClientRect().x, target);
+  await page.locator(`.elevation-holder [data-item-id="${target}"] rect`).first().click();
+  const bar = page.locator('.el-editbar');
+  await expect(bar).toBeVisible();
+
+  // width via a standard-width chip: the left edge stays put (narrower, so there is room beside it for a copy)
+  const x0 = await leftEdge();
+  await bar.getByRole('group', { name: 'Standard widths' }).getByRole('button', { name: '9"', exact: true }).click();
+  expect((await item()).width).toBeCloseTo(9 * 0.0254, 4);
+  expect(Math.abs((await leftEdge()) - x0)).toBeLessThan(1.5);
+
+  // door style from the edit bar
+  await bar.getByRole('combobox', { name: 'Door style' }).selectOption('glass');
+  expect((await item()).style.door).toBe('glass');
+
+  // copy lands next to it and becomes the selection; delete removes it
+  const before = await page.evaluate(() => (window as any).hds.store.project.items.length);
+  await bar.getByRole('button', { name: /Copy/ }).click();
+  expect(await page.evaluate(() => (window as any).hds.store.project.items.length)).toBe(before + 1);
+  const copyId = await page.evaluate(() => (window as any).hds.store.ui.selection.id);
+  expect(copyId).not.toBe(target);
+  await expect(page.locator(`.elevation-holder [data-item-id="${copyId}"]`)).toHaveCount(1);
+  await bar.getByRole('button', { name: /Delete/ }).click();
+  expect(await page.evaluate(() => (window as any).hds.store.project.items.length)).toBe(before);
+  await expect(page.locator(`.elevation-holder [data-item-id="${copyId}"]`)).toHaveCount(0);
+
+  // everything is undoable; the drawing follows
+  await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
+  for (let i = 0; i < 4; i++) await page.getByRole('button', { name: /Undo/ }).click();
+  const restored = await item();
+  expect(restored.style?.door).toBeUndefined();
+  expect(restored.width).toBeGreaterThan(9 * 0.0254);
+});
+
+test('drag pieces in the 3D wall view: along the wall, and wall cabinets up/down', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'mouse drag on desktop');
+  await open(page);
+  const { roomId, index } = await selectRangeWall(page);
+  await page.getByRole('button', { name: /View wall in 3D/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).hds.store.ui.camera)).toBe('front');
+  await page.waitForTimeout(800);
+  // screen position of an item's front-centre in the 3D wall view
+  const screenOf = (kind: string) =>
+    page.evaluate(([k, rid, wi]) => {
+      const { store, app } = (window as any).hds;
+      const v = app.viewer;
+      const room = store.room(rid);
+      // a piece of that kind standing against the viewed wall
+      const a = room.points[wi];
+      const b = room.points[(wi + 1) % room.points.length];
+      const len = Math.hypot(b.x - a.x, b.z - a.z);
+      const distToWall = (i: any) => Math.abs((b.x - a.x) * (a.z - i.z) - (a.x - i.x) * (b.z - a.z)) / len;
+      const it = store.project.items.filter((i: any) => i.kind === k && distToWall(i) < i.depth / 2 + 0.15).sort((x: any, y: any) => x.width - y.width)[0];
+      const g = v.items.get(it.id).obj;
+      const p = g.position.clone();
+      p.y += it.height / 2;
+      p.project(v.camera());
+      const r = v.renderer.domElement.getBoundingClientRect();
+      return { id: it.id, x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height, wx: it.x, wz: it.z, wy: it.y };
+    }, [kind, roomId, index] as const);
+
+  // a wall cabinet: drag up 30 px → it rises, stays on the wall
+  const up = await screenOf('wall-cabinet');
+  await page.mouse.move(up.x, up.y);
+  await page.mouse.down();
+  await page.mouse.move(up.x, up.y - 40, { steps: 8 });
+  await page.mouse.up();
+  const upAfter = await page.evaluate((id) => (window as any).hds.store.item(id), up.id);
+  expect(upAfter.y).toBeGreaterThan(up.wy + 0.05);
+
+  // a base cabinet: drag sideways → slides along the wall only, never off the floor or away from the wall
+  const base = await screenOf('base-cabinet');
+  await page.mouse.move(base.x, base.y);
+  await page.mouse.down();
+  await page.mouse.move(base.x - 70, base.y - 40, { steps: 10 });
+  await page.mouse.up();
+  const after = await page.evaluate((id) => (window as any).hds.store.item(id), base.id);
+  const movedX = Math.abs(after.x - base.wx) > 0.01;
+  const movedZ = Math.abs(after.z - base.wz) > 0.01;
+  expect(movedX || movedZ).toBe(true);
+  expect(movedX && movedZ).toBe(false); // only along the wall
+  expect(after.y).toBe(0);
 });

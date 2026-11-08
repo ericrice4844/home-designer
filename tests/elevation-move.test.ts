@@ -162,3 +162,41 @@ describe('putting a free-standing item against a wall', () => {
     expect(itemWall(p, sofa)).toEqual({ roomId: room.id, index: 0 });
   });
 });
+
+describe('editing on the wall', () => {
+  it('resizing keeps the left edge and stays on the wall', async () => {
+    const { resizeOnWall } = await import('../src/elevation');
+    const { p, room, onNorth } = northWall();
+    const cab = onNorth('base-cabinet', 1);
+    const before = wallElevation(p, room.id, 0)!.items.find((i) => i.item.id === cab.id)!;
+    resizeOnWall(p, room.id, 0, cab.id, 36 * IN);
+    const after = wallElevation(p, room.id, 0)!.items.find((i) => i.item.id === cab.id)!;
+    expect(after.s0).toBeCloseTo(before.s0, 6);
+    expect(after.s1 - after.s0).toBeCloseTo(36 * IN, 6);
+    // too wide for the space left: shifted back onto the wall
+    const el = wallElevation(p, room.id, 0)!;
+    resizeOnWall(p, room.id, 0, cab.id, el.length - before.s0 + 0.3);
+    const e = wallElevation(p, room.id, 0)!.items.find((i) => i.item.id === cab.id)!;
+    expect(e.s1).toBeLessThanOrEqual(el.length + 1e-6);
+  });
+
+  it('copying places the copy right beside the original, or in the next free spot', async () => {
+    const { duplicateOnWall } = await import('../src/elevation');
+    const { p, room, onNorth } = northWall();
+    const a = onNorth('base-cabinet', 1);
+    const id = duplicateOnWall(p, room.id, 0, a.id, 'copy-1')!;
+    const el = wallElevation(p, room.id, 0)!;
+    const ea = el.items.find((i) => i.item.id === a.id)!;
+    const ec = el.items.find((i) => i.item.id === id)!;
+    expect(ec.s0).toBeCloseTo(ea.s1, 6); // butted to the right
+    expect(ec.item.z).toBeCloseTo(a.z, 9); // same distance from the wall
+    // fill the wall: eventually there is no room and nothing is added
+    let n = 0;
+    while (duplicateOnWall(p, room.id, 0, a.id, `c${n}`) && n < 50) n++;
+    const count = p.items.length;
+    expect(duplicateOnWall(p, room.id, 0, a.id, 'last')).toBeNull();
+    expect(p.items.length).toBe(count);
+    const final = wallElevation(p, room.id, 0)!;
+    for (const i of final.items) expect(overlapsOnWall(final, i.item.id, i.s0, i.y0)).toBe(false);
+  });
+});

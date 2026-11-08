@@ -6,6 +6,7 @@ import type { Item, Project } from '../model';
 import { moveItem } from '../placement';
 import { store, type CameraMode } from '../state';
 import { formatLength } from '../units';
+import { snapOnWall, moveOnWall, wallCoords, wallElevation, type Elevation } from '../elevation';
 import { clearOverlay } from './overlay';
 import { renderPixelRatio, structureMayHaveChanged } from './perf';
 import { resolvePick } from './pick';
@@ -39,7 +40,17 @@ export class Viewer {
   private needsRebuild = true;
   private raycaster = new THREE.Raycaster();
   private selBox = new THREE.BoxHelper(new THREE.Object3D(), 0x2f80ed);
-  private drag: { id: string; plane: THREE.Plane; offset: THREE.Vector3; moved: boolean; start: { x: number; y: number } } | null = null;
+  private drag: {
+    id: string;
+    plane: THREE.Plane;
+    offset: THREE.Vector3;
+    moved: boolean;
+    start: { x: number; y: number };
+    /** set in the 3D wall view: the piece slides along the wall like in the elevation drawing */
+    wall?: { el: Elevation; grabS: number; grabY: number; s0: number; y0: number; floorY: number };
+  } | null = null;
+  /** the wall being looked at in the 3D wall view */
+  private wallView: { roomId: string; index: number } | null = null;
   private pointerDown: { x: number; y: number; time: number } | null = null;
   // walk mode
   private walk = { yaw: 0, pitch: 0, keys: new Set<string>(), joy: { x: 0, y: 0 }, lookId: -1, lookLast: { x: 0, y: 0 }, pos: new THREE.Vector3(), floorY: 0 };
@@ -438,6 +449,7 @@ export class Viewer {
 
   setMode(mode: CameraMode) {
     this.focusRoomId = null; // any camera change leaves the single-room wall view
+    this.wallView = null;
     const prev = this.mode;
     this.mode = mode;
     const c = this.houseCenter();
@@ -505,6 +517,7 @@ export class Viewer {
     if (!room || !wall) return;
     if (this.mode !== 'front') this.setMode('front');
     this.focusRoomId = roomId;
+    this.wallView = { roomId, index };
     const face = {
       x: (wall.a.x + wall.b.x) / 2 + wall.inward.x * (room.wallThickness / 2),
       z: (wall.a.z + wall.b.z) / 2 + wall.inward.z * (room.wallThickness / 2),
@@ -623,11 +636,26 @@ export class Viewer {
         // press-and-drag moves furniture right away (no need to select first)
         if (it && !it.locked) {
           const base = itemBaseY(store.project, it);
-          const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -base);
+          let plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -base);
+          let wall: NonNullable<Viewer['drag']>['wall'];
+          const wv = this.wallView;
+          const el = wv && this.mode === 'front' ? wallElevation(store.project, wv.roomId, wv.index, { include: [it.id] }) : null;
+          const onWall = el?.items.find((i) => i.item.id === it.id);
+          if (el && onWall) {
+            // looking straight at a wall: drag on the wall's own plane (a floor plane is seen edge-on here)
+            const n = new THREE.Vector3(el.wall.inward.x, 0, el.wall.inward.z);
+            plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, new THREE.Vector3(el.frame.faceA.x, 0, el.frame.faceA.z));
+            wall = { el, grabS: 0, grabY: 0, s0: onWall.s0, y0: onWall.y0, floorY: el.room.elevation };
+          }
           const pt = new THREE.Vector3();
           this.raycaster.setFromCamera(this.ndc(e), this.camera());
           this.raycaster.ray.intersectPlane(plane, pt);
-          this.drag = { id: it.id, plane, offset: new THREE.Vector3(it.x - pt.x, 0, it.z - pt.z), moved: false, start: { x: e.clientX, y: e.clientY } };
+          if (wall) {
+            const c = wallCoords(wall.el, { x: pt.x, z: pt.z }, pt.y - wall.floorY);
+            wall.grabS = c.s - wall.s0;
+            wall.grabY = c.y - wall.y0;
+          }
+          this.drag = { id: it.id, plane, offset: new THREE.Vector3(it.x - pt.x, 0, it.z - pt.z), moved: false, start: { x: e.clientX, y: e.clientY }, wall };
           this.orbitP.enabled = this.orbitO.enabled = false;
           cv.setPointerCapture(e.pointerId);
         }
@@ -653,6 +681,16 @@ export class Viewer {
         if (!this.raycaster.ray.intersectPlane(this.drag.plane, pt)) return;
         const id = this.drag.id;
         const off = this.drag.offset;
+        const wall = this.drag.wall;
+        if (wall) {
+          const c = wallCoords(wall.el, { x: pt.x, z: pt.z }, pt.y - wall.floorY);
+          // snap within ~8 screen pixels, like the elevation drawing
+          const metersPerPx = (this.ortho.right - this.ortho.left) / this.ortho.zoom / Math.max(1, this.el.clientWidth);
+          const free = { s0: c.s - wall.grabS, y0: c.y - wall.grabY };
+          const snap = e.altKey ? free : snapOnWall(wall.el, id, free.s0, free.y0, 8 * metersPerPx);
+          store.live((p) => moveOnWall(p, wall.el, id, snap.s0, snap.y0), 'items');
+          return;
+        }
         store.live((p) => {
           const it = p.items.find((i) => i.id === id);
           if (it) moveItem(p, it, pt.x + off.x, pt.z + off.z, { noSnap: e.altKey });
