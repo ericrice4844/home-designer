@@ -1316,6 +1316,12 @@ input.len.big {
 .elevation-bar {
   justify-content: center;
   font-weight: 600;
+  flex-wrap: nowrap;
+}
+.elevation-bar select {
+  width: auto;
+  max-width: 70%;
+  font-weight: 600;
 }
 .elevation-holder {
   overflow-x: auto;
@@ -1325,6 +1331,8 @@ input.len.big {
 }
 .elevation-holder svg {
   display: block;
+  margin: 0 auto;
+  touch-action: none; /* dragging pieces must not scroll the dialog */
 }
 .el-item {
   cursor: pointer;

@@ -18,6 +18,7 @@ import { kitchenPanel } from './kitchenPanel';
 import { setPlacementCenter } from './importers';
 import { libraryPanel } from './library';
 import { handleTwoPoints } from './trace';
+import { elevationForItem } from './elevation';
 import { shortcutFor } from './shortcuts';
 
 type RightTab = 'edit' | 'kitchen' | 'settings';
@@ -253,6 +254,7 @@ export class App {
           const q = p.items.find((i) => i.id === it.id);
           if (q) q.locked = !q.locked;
         }), 'act', 'Lock position'),
+        button(h('span', {}, '📐', h('small', {}, 'Wall')), () => elevationForItem(it.id), 'act', 'Elevation view: see and move it on a wall'),
         button(h('span', {}, '✎', h('small', {}, 'Edit')), details, 'act', 'Size, color & more'),
         del,
         button('✕', () => store.select(null), 'act close', 'Deselect (Esc)'),

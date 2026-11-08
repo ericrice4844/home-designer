@@ -3,7 +3,7 @@ import { area, bounds, ceilingHeightAt, centroid, maxCeilingHeight, roomAt, room
 import { FT, IN, uid, type CeilingType, type FloorType, type Item, type ItemShape, type Opening, type OpeningType, type Project, type Room } from '../model';
 import { clampOpening, duplicateRoom, freeOpeningOffset, itemsInRoom, scaleRoom, setWallLength, splitWall } from '../edits';
 import { store } from '../state';
-import { wallViewSection } from './elevation';
+import { elevationForItem, elevationForRoom, wallViewSection } from './elevation';
 import { floorPreview } from '../three/textures';
 import { formatArea, formatLength } from '../units';
 import { button, checkbox, colorInput, field, h, lengthInput, numberInput, row, section, select, slider, toast } from './dom';
@@ -174,6 +174,7 @@ export function roomPanel(room: Room, wallIndex?: number): HTMLElement {
           store.select({ type: 'room', id: room.id });
           store.setUI({ camera: 'walk', view: store.ui.view === 'plan' ? 'split' : store.ui.view });
         }, 'primary'),
+        button('📐 Wall elevations', () => elevationForRoom(room)),
         button('Duplicate', () => {
           let copy: Room | undefined;
           store.update((p) => (copy = duplicateRoom(p, room.id, b.maxX - b.minX)));
@@ -419,6 +420,7 @@ export function itemPanel(it: Item): HTMLElement {
         checkbox(!!it.locked, 'Lock position', (v) => upd((q) => (q.locked = v))),
       ),
       row(
+        button('📐 Elevation view', () => elevationForItem(it.id), '', 'See and move this piece on its wall'),
         button('Duplicate', () => duplicateItem(it), 'primary'),
         button('Save to My items', () => {
           addToLibrary(it);

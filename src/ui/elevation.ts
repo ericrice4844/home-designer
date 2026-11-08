@@ -1,9 +1,10 @@
 // Wall view: the list of things on the selected wall, a dimensioned elevation drawing, and "view in 3D".
-import { neighbourWall, wallElevation, type Elevation } from '../elevation';
+import { anchorToWall, canLift, itemWall, moveOnWall, neighbourWall, overlapsOnWall, snapOnWall, wallElevation, wallLabel, wallsByDistance, type Elevation } from '../elevation';
+import { roomWalls } from '../geometry';
 import type { Room } from '../model';
 import { store } from '../state';
 import { formatLength } from '../units';
-import { button, h, modal, section } from './dom';
+import { button, h, modal, section, toast } from './dom';
 import { buildPrintDocument } from './print';
 
 const fmt = (m: number) => formatLength(m, store.project.settings.units);
@@ -36,7 +37,7 @@ export function wallViewSection(room: Room, wallIndex: number): HTMLElement {
     ),
   );
   return section(
-    `Wall ${wallIndex + 1} · ${room.name}`,
+    `${wallLabel(room, wallIndex)} · ${room.name}`,
     h('p', { class: 'hint' }, `${fmt(el.length)} long · ${el.items.length} item${el.items.length === 1 ? '' : 's'}${el.openings.length ? ` · ${el.openings.length} door/window${el.openings.length > 1 ? 's' : ''}` : ''}. Left to right as seen from inside the room.`),
     h('div', { class: 'row wrap' },
       button('📐 Wall elevation', () => openElevation(room.id, wallIndex), 'primary'),
@@ -54,15 +55,24 @@ const PAD_R = 24;
 const PAD_T = 56;
 const PAD_B = 86;
 
-/** SVG elevation of a wall. Items carry data-item-id so clicks can select them. */
-export function elevationSvg(el: Elevation, width: number, selectedId?: string): SVGSVGElement {
+export interface DragView {
+  id: string;
+  guides: { s?: number; y?: number }[];
+  overlap: boolean;
+}
+
+/** SVG elevation of a wall. Items carry data-item-id so they can be tapped / dragged. */
+export function elevationSvg(el: Elevation, maxWidth: number, selectedId?: string, drag?: DragView, maxHeight = Infinity): SVGSVGElement & { scaleK?: number } {
   const NS = 'http://www.w3.org/2000/svg';
   const maxH = Math.max(...el.ceiling.map(([, y]) => y), ...el.items.map((i) => i.y1), ...el.openings.map((o) => o.y1));
-  const k = (width - PAD_L - PAD_R) / Math.max(el.length, 0.5);
+  // fit both the width and the height available (a short, tall bathroom wall must not run off the bottom)
+  const k = Math.max(20, Math.min((maxWidth - PAD_L - PAD_R) / Math.max(el.length, 0.5), (maxHeight - PAD_T - PAD_B) / Math.max(maxH, 0.5)));
+  const width = Math.round(PAD_L + PAD_R + Math.max(el.length, 0.5) * k);
   const height = PAD_T + maxH * k + PAD_B;
   const X = (s: number) => PAD_L + s * k;
   const Y = (y: number) => PAD_T + (maxH - y) * k;
-  const svg = document.createElementNS(NS, 'svg');
+  const svg = document.createElementNS(NS, 'svg') as SVGSVGElement & { scaleK?: number };
+  svg.scaleK = k;
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   svg.setAttribute('width', String(width));
   svg.setAttribute('height', String(Math.round(height)));
@@ -92,7 +102,8 @@ export function elevationSvg(el: Elevation, width: number, selectedId?: string):
   // tall/floor pieces first, wall-hung on top
   const order = [...el.items].sort((a, b) => (a.row === 'wall' ? 1 : 0) - (b.row === 'wall' ? 1 : 0));
   for (const e of order) {
-    const sel = e.item.id === selectedId;
+    const sel = e.item.id === selectedId || e.item.id === drag?.id;
+    const bad = drag?.id === e.item.id && drag.overlap;
     const g = document.createElementNS(NS, 'g');
     g.setAttribute('data-item-id', e.item.id);
     g.setAttribute('class', 'el-item');
@@ -100,7 +111,18 @@ export function elevationSvg(el: Elevation, width: number, selectedId?: string):
     g.setAttribute('role', 'button');
     g.setAttribute('aria-label', `${e.item.name}, ${fmt(e.s1 - e.s0)} wide`);
     const r = document.createElementNS(NS, 'rect');
-    const attrs: Record<string, string | number> = { x: X(e.s0), y: Y(e.y1), width: Math.max(1, (e.s1 - e.s0) * k), height: Math.max(1, (e.y1 - e.y0) * k), fill: e.item.color, 'fill-opacity': 0.85, stroke: sel ? '#2f80ed' : '#222', 'stroke-width': sel ? 3 : 1 };
+    const attrs: Record<string, string | number> = {
+      x: X(e.s0),
+      y: Y(e.y1),
+      width: Math.max(1, (e.s1 - e.s0) * k),
+      height: Math.max(1, (e.y1 - e.y0) * k),
+      fill: e.item.color,
+      'fill-opacity': e.projected ? 0.35 : 0.85,
+      stroke: bad ? '#e2574c' : sel ? '#2f80ed' : '#222',
+      'stroke-width': sel || bad ? 3 : 1,
+    };
+    if (e.projected) attrs['stroke-dasharray'] = '6 4';
+    if (!e.item.locked) attrs.style = 'cursor: grab';
     for (const [a, v] of Object.entries(attrs)) r.setAttribute(a, String(v));
     g.appendChild(r);
     if (e.item.countertop) {
@@ -117,6 +139,12 @@ export function elevationSvg(el: Elevation, width: number, selectedId?: string):
       for (const [a, v] of Object.entries({ x: X((e.s0 + e.s1) / 2), y: Y((e.y0 + e.y1) / 2) + 4, 'font-size': 10, 'text-anchor': 'middle', fill: luminance(e.item.color) < 0.45 ? '#fff' : '#111' })) label.setAttribute(a, String(v));
       label.textContent = name;
       g.appendChild(label);
+      if (e.projected && hPx > 30) {
+        const sub = document.createElementNS(NS, 'text');
+        for (const [a, v] of Object.entries({ x: X((e.s0 + e.s1) / 2), y: Y((e.y0 + e.y1) / 2) + 17, 'font-size': 9, 'text-anchor': 'middle', fill: '#333' })) sub.setAttribute(a, String(v));
+        sub.textContent = `${fmt(e.gap)} out from wall`;
+        g.appendChild(sub);
+      }
     }
     svg.appendChild(g);
   }
@@ -148,6 +176,33 @@ export function elevationSvg(el: Elevation, width: number, selectedId?: string):
     for (const y of [a, b]) add('line', { x1: x - 4, y1: Y(y), x2: x + 4, y2: Y(y), stroke: '#6a1b9a', 'stroke-width': 1 });
     if ((b - a) * k > 14) add('text', { x: x - 4, y: (Y(a) + Y(b)) / 2 + 3, 'font-size': 9.5, 'text-anchor': 'end', fill: '#6a1b9a' }, fmt(b - a));
   }
+
+  // while dragging: snap guides and live distances to the neighbours / floor
+  const d = drag && el.items.find((i) => i.item.id === drag.id);
+  if (drag && d) {
+    for (const g of drag.guides) {
+      if (g.s !== undefined) add('line', { x1: X(g.s), y1: PAD_T - 8, x2: X(g.s), y2: Y(0) + 8, stroke: '#e67e22', 'stroke-width': 1.2, 'stroke-dasharray': '5 4' });
+      if (g.y !== undefined) add('line', { x1: X(0) - 8, y1: Y(g.y), x2: X(el.length) + 8, y2: Y(g.y), stroke: '#e67e22', 'stroke-width': 1.2, 'stroke-dasharray': '5 4' });
+    }
+    const same = el.items.filter((o) => o !== d && !o.projected && o.y0 < d.y1 - 0.01 && o.y1 > d.y0 + 0.01);
+    const leftEdge = Math.max(0, ...same.filter((o) => o.s1 <= d.s0 + 0.005).map((o) => o.s1));
+    const rightEdge = Math.min(el.length, ...same.filter((o) => o.s0 >= d.s1 - 0.005).map((o) => o.s0));
+    const yMid = Y((d.y0 + d.y1) / 2);
+    const live = (a: number, b: number) => {
+      if (b - a < 0.003) return;
+      add('line', { x1: X(a), y1: yMid, x2: X(b), y2: yMid, stroke: '#e67e22', 'stroke-width': 1.5 });
+      add('rect', { x: X((a + b) / 2) - 26, y: yMid - 9, width: 52, height: 16, rx: 8, fill: '#fff', stroke: '#e67e22' });
+      add('text', { x: X((a + b) / 2), y: yMid + 3, 'font-size': 10, 'text-anchor': 'middle', fill: '#b35a00', 'font-weight': 600 }, fmt(b - a));
+    };
+    live(leftEdge, d.s0);
+    live(d.s1, rightEdge);
+    if (d.y0 > 0.02) {
+      const xm = X((d.s0 + d.s1) / 2);
+      add('line', { x1: xm, y1: Y(0), x2: xm, y2: Y(d.y0), stroke: '#e67e22', 'stroke-width': 1.5 });
+      add('text', { x: xm + 4, y: (Y(0) + Y(d.y0)) / 2, 'font-size': 10, fill: '#b35a00', 'font-weight': 600 }, `↑ ${fmt(d.y0)}`);
+    }
+    if (drag.overlap) add('text', { x: X((d.s0 + d.s1) / 2), y: Y(d.y1) - 6, 'font-size': 11, 'text-anchor': 'middle', fill: '#c0392b', 'font-weight': 700 }, 'Overlaps another piece');
+  }
   return svg;
 }
 
@@ -165,21 +220,42 @@ function luminance(hex: string) {
   return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
 }
 
-/** Full-size elevation dialog: step around the room, tap a piece to edit it, print. */
-export function openElevation(roomId: string, wallIndex: number) {
+/** Full-size elevation dialog: pick/step walls, drag pieces along the wall (and up/down), tap to edit, print. */
+export function openElevation(roomId: string, wallIndex: number, opts: { include?: string[]; focus?: string } = {}) {
   let index = wallIndex;
+  const include = opts.include ?? [];
   const holder = h('div', { class: 'elevation-holder' });
-  const title = h('span', {});
+  const wallSelect = h('select', { 'aria-label': 'Wall' });
+  const pushBtn = button('⇥ Push against this wall', () => {
+    store.update((p) => include.forEach((id) => anchorToWall(p, id, roomId, index)));
+    render();
+  });
+  let drag: (DragView & { start: { x: number; y: number }; s0: number; y0: number; el: Elevation; moved: boolean; pointerId: number }) | null = null;
+  let suppressClick = false;
+
+  const current = () => {
+    const room = store.room(roomId);
+    return room ? wallElevation(store.project, roomId, index, { include }) : null;
+  };
   const render = () => {
     const room = store.room(roomId);
-    const el = room && wallElevation(store.project, roomId, index);
+    const el = current();
     if (!room || !el) return;
-    title.textContent = `${room.name} · wall ${index + 1} · ${fmt(el.length)}`;
+    wallSelect.replaceChildren(
+      ...roomWalls(room).map((w) => h('option', { value: String(w.index), selected: w.index === index }, `${wallLabel(room, w.index)} · ${fmt(w.length - room.wallThickness)}`)),
+    );
     const width = Math.max(320, Math.min(1000, window.innerWidth - 60));
-    const sel = store.ui.selection?.type === 'item' ? store.ui.selection.id : undefined;
-    holder.replaceChildren(elevationSvg(el, width, sel));
+    const height = Math.max(260, window.innerHeight - 300); // leave room for the dialog's header and buttons
+    const sel = opts.focus ?? (store.ui.selection?.type === 'item' ? store.ui.selection.id : undefined);
+    holder.replaceChildren(elevationSvg(el, width, sel, drag ?? undefined, height));
     if (!el.items.length && !el.openings.length) holder.append(h('p', { class: 'hint' }, 'Nothing is placed against this wall yet.'));
+    pushBtn.hidden = !el.items.some((i) => i.projected);
   };
+  wallSelect.addEventListener('change', () => {
+    index = Number(wallSelect.value);
+    store.select({ type: 'wall', roomId, index });
+    render();
+  });
   const step = (d: 1 | -1) => {
     const room = store.room(roomId);
     if (!room) return;
@@ -187,7 +263,59 @@ export function openElevation(roomId: string, wallIndex: number) {
     store.select({ type: 'wall', roomId, index });
     render();
   };
+
+  // drag pieces: left/right along the wall, up/down for wall-hung ones
+  holder.addEventListener('pointerdown', (e) => {
+    const g = (e.target as Element).closest('[data-item-id]');
+    if (!g) return;
+    const id = g.getAttribute('data-item-id')!;
+    const el = current();
+    const it = el?.items.find((i) => i.item.id === id);
+    if (!el || !it || it.item.locked) return;
+    drag = { id, guides: [], overlap: false, start: { x: e.clientX, y: e.clientY }, s0: it.s0, y0: it.y0, el, moved: false, pointerId: e.pointerId };
+    holder.setPointerCapture(e.pointerId);
+  });
+  holder.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    const svg = holder.querySelector('svg') as (SVGSVGElement & { scaleK?: number }) | null;
+    const rect = svg?.getBoundingClientRect();
+    if (!svg || !rect) return;
+    // screen px → meters: the SVG may be scaled to fit
+    const k = (svg.scaleK ?? 1) * (rect.width / Number(svg.getAttribute('width')));
+    const dx = e.clientX - drag.start.x;
+    const dy = e.clientY - drag.start.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    drag.moved = true;
+    const free = { s0: drag.s0 + dx / k, y0: drag.y0 - dy / k };
+    const snap = e.altKey ? { ...free, guides: [] } : snapOnWall(drag.el, drag.id, free.s0, free.y0, 8 / k);
+    const id = drag.id;
+    const startEl = drag.el;
+    store.live((p) => moveOnWall(p, startEl, id, snap.s0, snap.y0), 'items');
+    drag.guides = snap.guides;
+    drag.overlap = overlapsOnWall(startEl, id, snap.s0, canLift(startEl.items.find((i) => i.item.id === id)!) ? snap.y0 : drag.y0);
+    render();
+  });
+  const endDrag = (e: PointerEvent) => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    const { moved, id } = drag;
+    drag = null;
+    suppressClick = true; // the pointer was captured: handle the tap here, not in the click that follows
+    setTimeout(() => (suppressClick = false), 0);
+    if (moved) {
+      store.commit();
+      render();
+      return;
+    }
+    if (e.type === 'pointerup') {
+      store.select({ type: 'item', id });
+      m.close();
+    }
+  };
+  holder.addEventListener('pointerup', endDrag);
+  holder.addEventListener('pointercancel', endDrag);
+
   holder.addEventListener('click', (e) => {
+    if (suppressClick) return;
     const g = (e.target as Element).closest('[data-item-id]');
     if (!g) return;
     store.select({ type: 'item', id: g.getAttribute('data-item-id')! });
@@ -195,23 +323,36 @@ export function openElevation(roomId: string, wallIndex: number) {
   });
   holder.addEventListener('keydown', (e) => {
     const g = (e.target as Element).closest('[data-item-id]');
-    if (g && (e.key === 'Enter' || e.key === ' ')) {
+    if (!g) return;
+    if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      (g as unknown as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      store.select({ type: 'item', id: g.getAttribute('data-item-id')! });
+      m.close();
+      return;
     }
+    // keyboard nudging: ← → along the wall (1"), ↑ ↓ for wall-hung pieces; Shift = 1'
+    const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
+    if (!dir) return;
+    e.preventDefault();
+    const id = g.getAttribute('data-item-id')!;
+    const el = current();
+    const it = el?.items.find((i) => i.item.id === id);
+    if (!el || !it || it.item.locked) return;
+    const stepM = (e.shiftKey ? 12 : 1) * (store.project.settings.units === 'imperial' ? 0.0254 : 0.01);
+    store.update((p) => moveOnWall(p, el, id, it.s0 + dir[0] * stepM, it.y0 + dir[1] * stepM));
+    render();
+    (holder.querySelector(`[data-item-id="${id}"]`) as HTMLElement | null)?.focus();
   });
+
   const body = h(
     'div',
     { class: 'elevation' },
-    h('div', { class: 'row wrap elevation-bar' },
-      button('◀', () => step(-1), 'icon', 'Previous wall'),
-      title,
-      button('▶', () => step(1), 'icon', 'Next wall'),
-    ),
+    h('div', { class: 'row wrap elevation-bar' }, button('◀', () => step(-1), 'icon', 'Previous wall'), wallSelect, button('▶', () => step(1), 'icon', 'Next wall')),
     holder,
-    h('p', { class: 'hint' }, 'Seen from inside the room. Red: widths along the floor · blue: wall-hung pieces · purple: heights. Tap a piece to edit it.'),
+    h('p', { class: 'hint' }, 'Seen from inside the room. Drag a piece to move it along the wall (wall-hung pieces also up/down); it snaps to neighbours, centres and standard heights – hold Alt for free movement. Tap a piece to edit it. Red: widths along the floor · blue: wall-hung · purple: heights.'),
   );
   const m = modal('Wall elevation', body, [
+    pushBtn,
     button('🎥 View in 3D', () => {
       m.close();
       viewWallIn3D(roomId, index);
@@ -222,10 +363,49 @@ export function openElevation(roomId: string, wallIndex: number) {
       const w = window.open('', '_blank');
       if (!w) return;
       const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svg));
-      buildPrintDocument(w.document, title.textContent ?? 'Wall elevation', url);
+      const room = store.room(roomId);
+      buildPrintDocument(w.document, `${room?.name ?? ''} · ${room ? wallLabel(room, index) : ''}`, url);
     }),
     button('Done', () => m.close(), 'primary'),
   ]);
   m.el.querySelector('.modal')?.classList.add('wide');
   render();
+}
+
+/** Choose which wall to show: nearest first for an item, or all walls of a room. */
+export function pickWall(choices: { roomId: string; index: number; label: string; length: number; distance?: number }[], title: string, onPick: (c: { roomId: string; index: number }) => void) {
+  const list = h(
+    'div',
+    { class: 'wall-items' },
+    ...choices.map((c, i) =>
+      h(
+        'button',
+        { class: 'wall-item', onclick: () => (m.close(), onPick(c)) },
+        h('span', { class: 'swatch-dot', style: { background: i === 0 && c.distance !== undefined ? '#2f80ed' : '#ffffff' } }),
+        h('span', { class: 'wall-item-name' }, c.label + (i === 0 && c.distance !== undefined ? ' (nearest)' : '')),
+        h('span', { class: 'wall-item-meta' }, `${fmt(c.length)} long${c.distance !== undefined ? ` · ${fmt(c.distance)} away` : ''}`),
+      ),
+    ),
+  );
+  const m = modal(title, list);
+}
+
+/** "Elevation view" for an item: straight to its wall if it is against one, otherwise ask which wall. */
+export function elevationForItem(itemId: string) {
+  const it = store.item(itemId);
+  if (!it) return;
+  const anchored = itemWall(store.project, it);
+  if (anchored) return openElevation(anchored.roomId, anchored.index, { focus: it.id });
+  const walls = wallsByDistance(store.project, it);
+  if (!walls.length) return toast('Move the item into a room first');
+  pickWall(walls, `Which wall should “${it.name}” be shown against?`, (c) => openElevation(c.roomId, c.index, { include: [it.id], focus: it.id }));
+}
+
+/** "Wall elevations" for a room: pick any of its walls. */
+export function elevationForRoom(room: Room) {
+  pickWall(
+    roomWalls(room).map((w) => ({ roomId: room.id, index: w.index, label: wallLabel(room, w.index), length: w.length - room.wallThickness })),
+    `Wall elevations · ${room.name}`,
+    (c) => openElevation(c.roomId, c.index),
+  );
 }
